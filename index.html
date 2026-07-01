@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0D12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Meu Financeiro</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config={theme:{extend:{colors:{night:'#0B0D12',panel:'#12151D',card:'#161A24',line:'#222632',accent:{DEFAULT:'#5EE6A8',dark:'#3DA870'},danger:'#FF6B6B',warn:'#FFC15E'},borderRadius:{'2xl':'1.25rem'}}}}
+</script>
+<style>
+*{box-sizing:border-box}
+html,body,#root{height:100%;background:#0B0D12}
+body{-webkit-tap-highlight-color:transparent;overscroll-behavior:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#2a3040;border-radius:99px}
+@keyframes fu{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.fu{animation:fu .2s ease-out}
+input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.4)}
+input[type=number]{-moz-appearance:textfield}
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+select option{background:#161A24}
+.divide-line>*+*{border-top:1px solid #222632}
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="text-white antialiased">
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useContext,createContext,useMemo,useCallback}=React;
+
+/* ═══════════════════════════════════════
+   UTILS
+═══════════════════════════════════════ */
+const pad2=n=>String(n).padStart(2,'0');
+const uid=()=>(crypto.randomUUID?crypto.randomUUID():'id-'+Date.now().toString(36)+Math.random().toString(36).slice(2));
+const fmtCur=v=>(Number.isFinite(v)?v:0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const fmtDate=iso=>new Date(iso).toLocaleDateString('pt-BR');
+const mkOf=d=>{const dt=d||new Date();return dt.getFullYear()+'-'+pad2(dt.getMonth()+1);};
+const curMk=()=>mkOf(new Date());
+const addMths=(mk,n)=>{const[y,m]=mk.split('-').map(Number);const d=new Date(y,m-1+n,1);return mkOf(d);};
+const daysIn=(y,m1)=>new Date(y,m1,0).getDate();
+const clamp=(day,y,m1)=>Math.min(day,daysIn(y,m1));
+const addMoCl=(date,n)=>{const tot=date.getFullYear()*12+date.getMonth()+n;const y=Math.floor(tot/12),m0=((tot%12)+12)%12;return new Date(y,m0,clamp(date.getDate(),y,m0+1));};
+const invMkOf=(date,cd)=>date.getDate()<=cd?mkOf(date):addMths(mkOf(date),1);
+const invDueDate=(mk,cd,dd)=>{const[y,m]=mk.split('-').map(Number);return new Date(y,m-1+(dd<cd?1:0),dd);};
+const toDateVal=iso=>{const d=new Date(iso);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());};
+const fromDateVal=v=>new Date(v+'T12:00:00').toISOString();
+
+// Balances
+const acctBal=(a,txs)=>{
+  let b=a.initialBalance;
+  for(const t of txs){
+    if(t.type==='receita'&&t.accountId===a.id)b+=t.amount;
+    if(t.type==='despesa'&&t.accountId===a.id)b-=t.amount;
+    if(t.type==='transferencia'){if(t.accountId===a.id)b-=t.amount;if(t.toAccountId===a.id)b+=t.amount;}
+  }
+  return Math.round(b*100)/100;
+};
+const totalBal=(accts,txs)=>accts.filter(a=>!a.archived).reduce((s,a)=>s+acctBal(a,txs),0);
+const liquidBal=(accts,txs)=>accts.filter(a=>!a.archived&&['banco','dinheiro','vr'].includes(a.type)).reduce((s,a)=>s+acctBal(a,txs),0);
+
+// Cards
+const cardUsed=(card,txs,payments)=>{
+  let u=0;
+  for(const t of txs){
+    if(t.cardId!==card.id||t.isInvoicePayment||!t.invoiceId)continue;
+    const mk=t.invoiceId.split('_')[1];
+    if(!payments.some(p=>p.cardId===card.id&&p.monthKey===mk&&p.paid))u+=t.amount;
+  }
+  return Math.round(u*100)/100;
+};
+const invTotal=(cid,mk,txs)=>txs.filter(t=>t.invoiceId===cid+'_'+mk&&!t.isInvoicePayment).reduce((s,t)=>s+t.amount,0);
+const invStat=(card,mk,payments)=>{
+  if(payments.some(p=>p.cardId===card.id&&p.monthKey===mk&&p.paid))return'paga';
+  const[y,m]=mk.split('-').map(Number);
+  return new Date()>new Date(y,m-1,card.closingDay,23,59)?'fechada':'aberta';
+};
+
+// Installments builder
+const buildInst=(inp,cards)=>{
+  const n=Math.max(1,inp.installments||1),gid=n>1?uid():undefined;
+  const base=new Date(inp.date),cents=Math.round(inp.amount*100),bc=Math.floor(cents/n),rem=cents-bc*n;
+  return Array.from({length:n},(_,i)=>{
+    const d=addMoCl(base,i),amt=(bc+(i<rem?1:0))/100;
+    let invoiceId;
+    if(inp.cardId){const c=cards.find(c=>c.id===inp.cardId);if(c)invoiceId=c.id+'_'+invMkOf(d,c.closingDay);}
+    return{id:uid(),type:inp.type,amount:amt,category:inp.category,accountId:inp.accountId,
+      toAccountId:inp.toAccountId,cardId:inp.cardId,date:d.toISOString(),description:inp.description,
+      note:inp.note,installmentGroupId:gid,installmentIndex:n>1?i+1:undefined,installmentTotal:n>1?n:undefined,
+      invoiceId,createdAt:new Date().toISOString()};
+  });
+};
+
+// Monthly
+const mthTxs=(txs,mk)=>txs.filter(t=>t.date.slice(0,7)===mk&&!t.isInvoicePayment);
+const mthInc=(txs,mk)=>mthTxs(txs,mk).filter(t=>t.type==='receita').reduce((s,t)=>s+t.amount,0);
+const mthExp=(txs,mk)=>mthTxs(txs,mk).filter(t=>t.type==='despesa').reduce((s,t)=>s+t.amount,0);
+const expByCat=(txs,mk)=>{
+  const m={};mthTxs(txs,mk).filter(t=>t.type==='despesa').forEach(t=>m[t.category]=(m[t.category]||0)+t.amount);
+  return Object.entries(m).map(([c,v])=>({c,v})).sort((a,b)=>b.v-a.v);
+};
+
+// Recurring generation
+const genRec=(mk,bills,sals,existing)=>{
+  const[y,m]=mk.split('-').map(Number),out=[],at=new Date().toISOString();
+  for(const b of bills.filter(b=>b.active)){
+    if(existing.some(t=>t.recurringId===b.id&&t.date.slice(0,7)===mk))continue;
+    const d=clamp(b.dueDay,y,m);
+    out.push({id:uid(),type:'despesa',amount:b.amount,category:b.category,accountId:b.accountId,date:new Date(y,m-1,d).toISOString(),description:b.name,recurringId:b.id,createdAt:at});
+  }
+  for(const s of sals.filter(s=>s.active)){
+    if(existing.some(t=>t.recurringId===s.id&&t.date.slice(0,7)===mk))continue;
+    const d=clamp(s.payDay,y,m);
+    out.push({id:uid(),type:'receita',amount:s.amount,category:'Salário',accountId:s.accountId,date:new Date(y,m-1,d).toISOString(),description:s.description,recurringId:s.id,createdAt:at});
+  }
+  return out;
+};
+
+// Quick natural-language parser
+const qParse=(txt,cats,accounts,cards)=>{
+  const r={amount:null,category:null,accountId:null,cardId:null,type:'despesa',description:txt.trim()};
+  const mm=txt.match(/(\d+(?:[.,]\d{1,2})?)/);if(mm)r.amount=parseFloat(mm[1].replace(',','.'));
+  if(/ganhei|recebi|salário|salario/i.test(txt))r.type='receita';
+  const ct=cats.find(c=>txt.toLowerCase().includes(c.name.toLowerCase()));if(ct)r.category=ct.name;
+  const ac=accounts.find(a=>txt.toLowerCase().includes(a.name.toLowerCase()));if(ac)r.accountId=ac.id;
+  const cd=cards.find(c=>txt.toLowerCase().includes(c.name.toLowerCase()));if(cd)r.cardId=cd.id;
+  return r;
+};
+
+/* ═══════════════════════════════════════
+   CONSTANTS
+═══════════════════════════════════════ */
+const DEFAULT_CATS=['Alimentação','Mercado','Combustível','Transporte','Saúde','Farmácia','Moradia','Água','Energia','Internet','Telefone','Streaming','Lazer','Compras','Educação','Pets','Impostos','Investimentos','Salário','Transferência','Outros'].map((name,i)=>({id:'dc'+i,name,isDefault:true}));
+const COLORS=['#5EE6A8','#5E9EE6','#E6C45E','#E65E8C','#9D5EE6','#5EE6D4','#E68A5E','#8FE65E','#E65E5E','#5ECBE6'];
+const ACCT_TYPES=[{v:'banco',l:'Banco'},{v:'dinheiro',l:'Dinheiro físico'},{v:'vr',l:'VR / Benefícios'},{v:'investimento',l:'Investimento'},{v:'outro',l:'Outro'}];
+
+/* ═══════════════════════════════════════
+   STORAGE + AUTH
+═══════════════════════════════════════ */
+const SK='mf-v1';
+const mkEmpty=()=>({settings:null,accounts:[],cards:[],transactions:[],recurringBills:[],salaries:[],invoicePayments:[],categories:[...DEFAULT_CATS],lastGenMk:null});
+const loadD=()=>{try{return JSON.parse(localStorage.getItem(SK)||'null')||mkEmpty();}catch{return mkEmpty();}};
+const saveD=d=>{try{localStorage.setItem(SK,JSON.stringify(d));}catch{}};
+const hashPwd=async pwd=>{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(pwd));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');};
+
+/* ═══════════════════════════════════════
+   STORE
+═══════════════════════════════════════ */
+const Ctx=createContext(null);
+const useS=()=>useContext(Ctx);
+
+function Provider({children}){
+  const[d,setD]=useState(loadD);
+  const[auth,setAuth]=useState(false);
+  const[toast,setToast]=useState('');
+  const tmr=useRef(null);
+
+  useEffect(()=>{clearTimeout(tmr.current);tmr.current=setTimeout(()=>saveD(d),250);},[d]);
+
+  const note=msg=>{setToast(msg);setTimeout(()=>setToast(''),2200);};
+  const up=fn=>setD(p=>({...p,...fn(p)}));
+
+  // Auto-generate current month on login
+  useEffect(()=>{
+    if(!auth)return;
+    const mk=curMk();
+    setD(p=>{
+      if(p.lastGenMk===mk)return p;
+      const occ=genRec(mk,p.recurringBills,p.salaries,p.transactions);
+      return{...p,transactions:[...p.transactions,...occ],lastGenMk:mk};
+    });
+  },[auth]);
+
+  const createAcc=async(user,pwd)=>{const h=await hashPwd(pwd);up(()=>({settings:{username:user,passwordHash:h,currency:'BRL'}}));setAuth(true);};
+  const doLogin=async(user,pwd)=>{if(!d.settings)return false;const h=await hashPwd(pwd);const ok=d.settings.username===user&&d.settings.passwordHash===h;if(ok)setAuth(true);return ok;};
+  const logout=()=>setAuth(false);
+  const chgPwd=async pwd=>{const h=await hashPwd(pwd);up(p=>({settings:{...p.settings,passwordHash:h}}));note('Senha alterada.');};
+  const chgUser=u=>{up(p=>({settings:{...p.settings,username:u}}));note('Nome atualizado.');};
+
+  const addAcct=a=>{up(p=>({accounts:[...p.accounts,{...a,id:uid(),createdAt:new Date().toISOString()}]}));note('Conta criada.');};
+  const updAcct=(id,a)=>{up(p=>({accounts:p.accounts.map(x=>x.id===id?{...x,...a}:x)}));note('Conta atualizada.');};
+  const delAcct=id=>{up(p=>({accounts:p.accounts.filter(x=>x.id!==id)}));note('Conta excluída.');};
+
+  const addCard=c=>{up(p=>({cards:[...p.cards,{...c,id:uid(),createdAt:new Date().toISOString()}]}));note('Cartão criado.');};
+  const updCard=(id,c)=>{up(p=>({cards:p.cards.map(x=>x.id===id?{...x,...c}:x)}));note('Cartão atualizado.');};
+  const delCard=id=>{up(p=>({cards:p.cards.filter(x=>x.id!==id)}));note('Cartão excluído.');};
+
+  const addTx=inp=>{up(p=>({transactions:[...p.transactions,...buildInst(inp,p.cards)]}));note((inp.installments||1)>1?'Parcelamento criado.':'Lançamento adicionado.');};
+  const updTx=(id,p2)=>{up(p=>({transactions:p.transactions.map(t=>t.id===id?{...t,...p2}:t)}));note('Atualizado.');};
+  const delTx=id=>{up(p=>({transactions:p.transactions.filter(t=>t.id!==id)}));note('Excluído.');};
+  const delGrp=gid=>{up(p=>({transactions:p.transactions.filter(t=>t.installmentGroupId!==gid)}));note('Parcelamento excluído.');};
+
+  const addBill=r=>{const b={...r,id:uid(),createdAt:new Date().toISOString()};up(p=>{const occ=genRec(curMk(),[b],[],p.transactions);return{recurringBills:[...p.recurringBills,b],transactions:[...p.transactions,...occ]};});note('Conta recorrente criada.');};
+  const updBill=(id,r)=>{up(p=>({recurringBills:p.recurringBills.map(x=>x.id===id?{...x,...r}:x)}));note('Atualizado.');};
+  const delBill=id=>{up(p=>({recurringBills:p.recurringBills.filter(x=>x.id!==id)}));note('Excluído.');};
+
+  const addSal=s=>{const sl={...s,id:uid(),createdAt:new Date().toISOString()};up(p=>{const occ=genRec(curMk(),[],[sl],p.transactions);return{salaries:[...p.salaries,sl],transactions:[...p.transactions,...occ]};});note('Salário cadastrado.');};
+  const updSal=(id,s)=>{up(p=>({salaries:p.salaries.map(x=>x.id===id?{...x,...s}:x)}));note('Atualizado.');};
+  const delSal=id=>{up(p=>({salaries:p.salaries.filter(x=>x.id!==id)}));note('Excluído.');};
+
+  const payInv=(cid,mk,fromId,date)=>{
+    up(p=>{
+      const card=p.cards.find(c=>c.id===cid);if(!card)return{};
+      const tot=invTotal(cid,mk,p.transactions);
+      const pay={id:uid(),type:'despesa',amount:tot,category:'Outros',accountId:fromId,date,description:'Fatura '+card.name,isInvoicePayment:true,invoiceId:cid+'_'+mk,createdAt:new Date().toISOString()};
+      const others=p.invoicePayments.filter(x=>!(x.cardId===cid&&x.monthKey===mk));
+      return{transactions:[...p.transactions,pay],invoicePayments:[...others,{cardId:cid,monthKey:mk,paid:true,paidAt:date}]};
+    });
+    note('Fatura paga!');
+  };
+
+  const addCat=name=>{up(p=>({categories:[...p.categories,{id:uid(),name}]}));};
+  const delCat=id=>{up(p=>({categories:p.categories.filter(c=>c.id!==id||c.isDefault)}));};
+
+  const expData=()=>JSON.stringify({...d,exportedAt:new Date().toISOString()},null,2);
+  const impData=json=>{try{const p=JSON.parse(json);up(()=>({...mkEmpty(),...p}));note('Importado com sucesso!');return true;}catch{note('Arquivo inválido.');return false;}};
+  const clrData=()=>{up(()=>mkEmpty());note('Dados apagados.');};
+
+  const store={...d,auth,toast,createAcc,doLogin,logout,chgPwd,chgUser,addAcct,updAcct,delAcct,addCard,updCard,delCard,addTx,updTx,delTx,delGrp,addBill,updBill,delBill,addSal,updSal,delSal,payInv,addCat,delCat,expData,impData,clrData};
+
+  return(
+    <Ctx.Provider value={store}>
+      {children}
+      {toast&&<div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-card border border-line rounded-xl px-4 py-3 text-sm text-white shadow-xl fu max-w-[90vw] text-center pointer-events-none">{toast}</div>}
+    </Ctx.Provider>
+  );
+}
+
+/* ═══════════════════════════════════════
+   ICONS
+═══════════════════════════════════════ */
+const Ic=({s=20,cls='',ch})=><svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={cls}>{ch}</svg>;
+const IHome=p=><Ic {...p}><path d="M3 12L12 4l9 8"/><path d="M5 10v9a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1v-9"/></Ic>;
+const ISwap=p=><Ic {...p}><path d="M4 7h13M17 7l-3-3"/><path d="M20 17H7M7 17l3 3"/></Ic>;
+const IBank=p=><Ic {...p}><rect x={3} y={9} width={18} height={12} rx={1}/><path d="M3 9l9-6 9 6"/><path d="M9 9v12M15 9v12"/></Ic>;
+const ICrd=p=><Ic {...p}><rect x={3} y={5} width={18} height={14} rx={2}/><path d="M3 10h18"/></Ic>;
+const IChart=p=><Ic {...p}><path d="M18 20V10M12 20V4M6 20v-6"/></Ic>;
+const IGear=p=><Ic {...p}><circle cx={12} cy={12} r={3}/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></Ic>;
+const IPlus=p=><Ic {...p}><path d="M12 5v14M5 12h14"/></Ic>;
+const IX=p=><Ic {...p}><path d="M18 6L6 18M6 6l12 12"/></Ic>;
+const ITrash=p=><Ic {...p}><path d="M4 7h16M9 7V4h6v3M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></Ic>;
+const IEdit=p=><Ic {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4z"/></Ic>;
+const IUp=p=><Ic {...p}><path d="M7 17L17 7M9 7h8v8"/></Ic>;
+const IDown=p=><Ic {...p}><path d="M7 7l10 10M17 9v8H9"/></Ic>;
+const IRep=p=><Ic {...p}><path d="M17 2l4 4-4 4"/><path d="M3 12V9a4 4 0 014-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 12v3a4 4 0 01-4 4H3"/></Ic>;
+const IClock=p=><Ic {...p}><circle cx={12} cy={12} r={9}/><path d="M12 7v5l3 3"/></Ic>;
+const IReceipt=p=><Ic {...p}><path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M8 8h8M8 12h8M8 16h5"/></Ic>;
+const IWallet=p=><Ic {...p}><path d="M2 7a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2z"/><path d="M16 11h2v4h-2a2 2 0 010-4z"/></Ic>;
+const ILogout=p=><Ic {...p}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></Ic>;
+const IChk=p=><Ic {...p}><path d="M20 6L9 17l-5-5"/></Ic>;
+const ITrend=p=><Ic {...p}><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></Ic>;
+const IDownload=p=><Ic {...p}><path d="M12 3v12M7 11l5 5 5-5M5 21h14"/></Ic>;
+const IUpload=p=><Ic {...p}><path d="M12 21V9M7 13l5-5 5 5M5 21h14"/></Ic>;
+const IAlert=p=><Ic {...p}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1={12} y1={9} x2={12} y2={13}/><circle cx={12} cy={17} r={.5} fill="currentColor"/></Ic>;
+const IWand=p=><Ic {...p}><path d="M15 4l5 5L8 21H3v-5z"/><path d="M18 1l5 5"/></Ic>;
+const ITicket=p=><Ic {...p}><path d="M2 9a2 2 0 000 4v3a1 1 0 001 1h16a1 1 0 001-1v-3a2 2 0 000-4V6a1 1 0 00-1-1H3a1 1 0 00-1 1z"/><path d="M9 5v14"/></Ic>;
+
+/* ═══════════════════════════════════════
+   UI PRIMITIVES
+═══════════════════════════════════════ */
+const cx=(...a)=>a.filter(Boolean).join(' ');
+
+const Btn=({children,onClick,v='primary',type='button',cls='',disabled})=>{
+  const vs={primary:'bg-accent text-night hover:bg-accent-dark',secondary:'bg-panel text-white border border-line hover:border-zinc-500',danger:'text-danger border border-danger/30 bg-danger/10 hover:bg-danger/20',ghost:'text-zinc-400 hover:text-white hover:bg-panel'};
+  return<button type={type} onClick={onClick} disabled={disabled} className={cx('inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-3 text-sm font-semibold transition-all active:scale-95 disabled:opacity-50',vs[v],cls)}>{children}</button>;
+};
+const IBt=({children,onClick,cls=''})=><button type="button" onClick={onClick} className={cx('w-9 h-9 rounded-full flex items-center justify-center text-zinc-500 hover:text-white hover:bg-panel transition-colors shrink-0',cls)}>{children}</button>;
+
+const Inp=({label,cls='',...p})=>(
+  <label className="block">
+    {label&&<span className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</span>}
+    <input {...p} className={cx('w-full rounded-xl bg-panel border border-line px-3.5 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-accent transition-colors',cls)}/>
+  </label>
+);
+const Sel=({label,options,cls='',...p})=>(
+  <label className="block">
+    {label&&<span className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</span>}
+    <select {...p} className={cx('w-full rounded-xl bg-panel border border-line px-3.5 py-3 text-sm text-white focus:outline-none focus:border-accent transition-colors',cls)}>
+      {options.map(o=><option key={o.v??o} value={o.v??o}>{o.l??o}</option>)}
+    </select>
+  </label>
+);
+const Txtarea=({label,...p})=>(
+  <label className="block">
+    {label&&<span className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</span>}
+    <textarea {...p} rows={3} className="w-full rounded-xl bg-panel border border-line px-3.5 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-accent transition-colors resize-none"/>
+  </label>
+);
+const Seg=({value,onChange,opts})=>(
+  <div className="flex bg-panel border border-line rounded-xl p-1 gap-1">
+    {opts.map(o=><button key={o.v} type="button" onClick={()=>onChange(o.v)} className={cx('flex-1 py-2 text-xs font-semibold rounded-lg transition-colors',value===o.v?'bg-accent text-night':'text-zinc-400 hover:text-white')}>{o.l}</button>)}
+  </div>
+);
+const Swatches=({value,onChange})=>(
+  <div className="flex flex-wrap gap-2">
+    {COLORS.map(c=><button key={c} type="button" onClick={()=>onChange(c)} className={cx('w-8 h-8 rounded-full border-2 transition-all',value===c?'border-white scale-110':'border-transparent')} style={{backgroundColor:c}}/>)}
+  </div>
+);
+const PBar=({value,max,color='#5EE6A8'})=>{
+  const pct=max>0?Math.min(100,(value/max)*100):0;
+  const col=pct>90?'#FF6B6B':pct>70?'#FFC15E':color;
+  return<div className="w-full h-2 bg-panel rounded-full overflow-hidden"><div className="h-full rounded-full transition-all" style={{width:pct+'%',backgroundColor:col}}/></div>;
+};
+const Empty=({icon,title,sub,action})=>(
+  <div className="flex flex-col items-center text-center py-10 px-4 fu">
+    {icon&&<div className="text-zinc-600 mb-3">{icon}</div>}
+    <p className="text-white font-semibold mb-1">{title}</p>
+    {sub&&<p className="text-zinc-500 text-sm mb-4 max-w-xs">{sub}</p>}
+    {action}
+  </div>
+);
+const StatCard=({label,value,tone,icon,sub})=>{
+  const col=tone==='pos'?'text-accent':tone==='neg'?'text-danger':'text-white';
+  return(
+    <div className="bg-card rounded-2xl border border-line p-4 flex flex-col gap-1.5 min-w-0">
+      <div className="flex items-center justify-between text-zinc-500"><span className="text-xs font-medium truncate">{label}</span>{icon}</div>
+      <span className={cx('text-lg font-bold tracking-tight truncate',col)}>{value}</span>
+      {sub&&<span className="text-[11px] text-zinc-500">{sub}</span>}
+    </div>
+  );
+};
+const Toggle=({value,onChange,label})=>(
+  <label className="flex items-center gap-3 cursor-pointer">
+    <div onClick={()=>onChange(!value)} className={cx('w-10 h-6 rounded-full transition-colors relative shrink-0',value?'bg-accent':'bg-panel border border-line')}>
+      <div className={cx('absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all',value?'left-[18px]':'left-0.5')}/>
+    </div>
+    <span className="text-sm text-zinc-300">{label}</span>
+  </label>
+);
+
+function Modal({open,onClose,title,children}){
+  useEffect(()=>{document.body.style.overflow=open?'hidden':'';return()=>{document.body.style.overflow=''};},[open]);
+  if(!open)return null;
+  return(
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose}/>
+      <div className="relative w-full sm:max-w-md bg-card border border-line rounded-t-2xl sm:rounded-2xl max-h-[92vh] overflow-y-auto fu">
+        <div className="sticky top-0 bg-card border-b border-line px-5 py-4 flex items-center justify-between z-10">
+          <h2 className="font-semibold text-white text-base">{title}</h2>
+          <IBt onClick={onClose}><IX s={20}/></IBt>
+        </div>
+        <div className="p-5 pb-10">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   DOMAIN COMPONENTS
+═══════════════════════════════════════ */
+const acctIcon=type=>({banco:<IBank s={18}/>,dinheiro:<IWallet s={18}/>,vr:<ITicket s={18}/>,investimento:<ITrend s={18}/>}[type]||<IWallet s={18}/>);
+const acctLbl=type=>(ACCT_TYPES.find(t=>t.v===type)||{l:type}).l;
+
+function AcctRow({account,balance,onClick}){
+  return(
+    <button onClick={onClick} className="w-full flex items-center gap-3 bg-card border border-line rounded-2xl p-4 text-left active:scale-[0.99] transition-transform">
+      <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={{backgroundColor:account.color+'22',color:account.color}}>{acctIcon(account.type)}</div>
+      <div className="flex-1 min-w-0"><p className="text-sm font-semibold text-white truncate">{account.name}</p><p className="text-xs text-zinc-500">{acctLbl(account.type)}</p></div>
+      <span className={cx('text-sm font-bold shrink-0',balance<0?'text-danger':'text-white')}>{fmtCur(balance)}</span>
+    </button>
+  );
+}
+
+function CardTile({card,used,available,currentInv,status,onClick}){
+  const sl={aberta:'Aberta',fechada:'Fechada',paga:'Em dia'}[status]||status;
+  const sc={aberta:'text-zinc-400',fechada:'text-warn',paga:'text-accent'}[status]||'text-zinc-400';
+  return(
+    <button onClick={onClick} className="w-full text-left rounded-2xl p-4 border border-line active:scale-[0.99] transition-transform" style={{background:`linear-gradient(135deg,${card.color}22,#161A24)`}}>
+      <div className="flex items-start justify-between mb-3">
+        <div><p className="text-sm font-semibold text-white">{card.name}</p><p className="text-xs text-zinc-500">{card.bank}</p></div>
+        <span className={cx('text-[11px] font-semibold',sc)}>{sl}</span>
+      </div>
+      <div className="mb-3"><p className="text-[11px] text-zinc-500 mb-0.5">Fatura atual</p><p className="text-lg font-bold text-white">{fmtCur(currentInv)}</p></div>
+      <PBar value={used} max={card.limit} color={card.color}/>
+      <div className="flex justify-between mt-1.5 text-[11px] text-zinc-500"><span>Usado {fmtCur(used)}</span><span>Disponível {fmtCur(available)}</span></div>
+      <div className="flex justify-between mt-1.5 text-[11px] text-zinc-600"><span>Fecha dia {card.closingDay}</span><span>Vence dia {card.dueDay}</span></div>
+    </button>
+  );
+}
+
+function TxRow({tx,accName,onClick}){
+  const sign=tx.type==='receita'?'+':tx.type==='despesa'?'-':'';
+  const col=tx.type==='receita'?'text-accent':tx.type==='despesa'?'text-danger':'text-white';
+  const icon=tx.type==='transferencia'?<ISwap s={15} cls="text-zinc-400"/>:tx.type==='receita'?<IDown s={15} cls="text-accent"/>:<IUp s={15} cls="text-danger"/>;
+  return(
+    <button onClick={onClick} className="w-full flex items-center gap-3 py-3 text-left active:opacity-70 transition-opacity">
+      <div className="w-9 h-9 rounded-full bg-panel flex items-center justify-center shrink-0">{icon}</div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-white truncate flex items-center gap-1.5">
+          {tx.description}
+          {tx.recurringId&&<IRep s={10} cls="text-zinc-500 shrink-0"/>}
+          {tx.installmentTotal&&<span className="text-[10px] text-zinc-500 shrink-0">{tx.installmentIndex}/{tx.installmentTotal}</span>}
+        </p>
+        <p className="text-xs text-zinc-500 truncate">{[tx.category,accName,fmtDate(tx.date)].filter(Boolean).join(' · ')}</p>
+      </div>
+      <span className={cx('text-sm font-semibold shrink-0',col)}>{sign}{fmtCur(tx.amount)}</span>
+    </button>
+  );
+}
+
+function CatBars({items}){
+  const max=items.length?items[0].v:0;
+  return(
+    <div className="space-y-2.5">
+      {items.map(({c,v},i)=>(
+        <div key={c}>
+          <div className="flex justify-between text-xs mb-1"><span className="text-zinc-400 truncate pr-2">{c}</span><span className="text-white font-medium shrink-0">{fmtCur(v)}</span></div>
+          <div className="w-full h-1.5 bg-panel rounded-full overflow-hidden"><div className="h-full rounded-full" style={{width:(max>0?(v/max)*100:0)+'%',backgroundColor:COLORS[i%COLORS.length]}}/></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   FORMS
+═══════════════════════════════════════ */
+function AcctForm({editing,onClose}){
+  const s=useS();
+  const[name,setName]=useState(editing?.name||'');
+  const[type,setType]=useState(editing?.type||'banco');
+  const[bal,setBal]=useState(editing!=null?String(editing.initialBalance):'0');
+  const[color,setColor]=useState(editing?.color||COLORS[0]);
+  const[err,setErr]=useState('');
+  const submit=ev=>{
+    ev.preventDefault();setErr('');
+    if(!name.trim()){setErr('Informe o nome.');return;}
+    const ib=parseFloat(String(bal).replace(',','.'));
+    if(!Number.isFinite(ib)){setErr('Saldo inválido.');return;}
+    if(editing)s.updAcct(editing.id,{name:name.trim(),type,initialBalance:ib,color});
+    else s.addAcct({name:name.trim(),type,initialBalance:ib,color,archived:false});
+    onClose();
+  };
+  return(
+    <Modal open onClose={onClose} title={editing?'Editar conta':'Nova conta'}>
+      <form onSubmit={submit} className="space-y-4">
+        <Inp label="Nome da conta" value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Nubank, Dinheiro"/>
+        <Sel label="Tipo" value={type} onChange={e=>setType(e.target.value)} options={ACCT_TYPES}/>
+        <Inp label="Saldo inicial (pode ser negativo)" type="number" step="0.01" value={bal} onChange={e=>setBal(e.target.value)}/>
+        <div><p className="text-xs font-medium text-zinc-400 mb-2">Cor</p><Swatches value={color} onChange={setColor}/></div>
+        {err&&<p className="text-danger text-sm">{err}</p>}
+        <Btn type="submit" cls="w-full">{editing?'Salvar alterações':'Criar conta'}</Btn>
+      </form>
+    </Modal>
+  );
+}
+
+function CardForm({editing,onClose}){
+  const s=useS();
+  const[name,setName]=useState(editing?.name||'');
+  const[bank,setBank]=useState(editing?.bank||'');
+  const[limit,setLimit]=useState(editing?String(editing.limit):'');
+  const[cd,setCd]=useState(editing?String(editing.closingDay):'10');
+  const[dd,setDd]=useState(editing?String(editing.dueDay):'15');
+  const[color,setColor]=useState(editing?.color||COLORS[1]);
+  const[err,setErr]=useState('');
+  const submit=ev=>{
+    ev.preventDefault();setErr('');
+    if(!name.trim()){setErr('Informe o nome.');return;}
+    const lim=parseFloat(String(limit).replace(',','.'));
+    if(!lim||lim<=0){setErr('Informe o limite.');return;}
+    const c={name:name.trim(),bank:bank.trim(),limit:lim,closingDay:Math.max(1,Math.min(31,parseInt(cd)||10)),dueDay:Math.max(1,Math.min(31,parseInt(dd)||15)),color,archived:false};
+    if(editing)s.updCard(editing.id,c);else s.addCard(c);
+    onClose();
+  };
+  return(
+    <Modal open onClose={onClose} title={editing?'Editar cartão':'Novo cartão'}>
+      <form onSubmit={submit} className="space-y-4">
+        <Inp label="Nome do cartão" value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Nubank Roxinho"/>
+        <Inp label="Banco / Emissor" value={bank} onChange={e=>setBank(e.target.value)} placeholder="Ex: Nubank"/>
+        <Inp label="Limite (R$)" type="number" step="0.01" min="1" value={limit} onChange={e=>setLimit(e.target.value)}/>
+        <div className="grid grid-cols-2 gap-3">
+          <Inp label="Dia de fechamento" type="number" min="1" max="31" value={cd} onChange={e=>setCd(e.target.value)}/>
+          <Inp label="Dia de vencimento" type="number" min="1" max="31" value={dd} onChange={e=>setDd(e.target.value)}/>
+        </div>
+        <div><p className="text-xs font-medium text-zinc-400 mb-2">Cor</p><Swatches value={color} onChange={setColor}/></div>
+        {err&&<p className="text-danger text-sm">{err}</p>}
+        <Btn type="submit" cls="w-full">{editing?'Salvar alterações':'Criar cartão'}</Btn>
+      </form>
+    </Modal>
+  );
+}
+
+function TxForm({editing,onClose}){
+  const s=useS();
+  const isGrp=!!(editing?.installmentGroupId);
+  const[quick,setQuick]=useState('');
+  const[type,setType]=useState(editing?.type||'despesa');
+  const[amt,setAmt]=useState(editing?String(editing.amount):'');
+  const[cat,setCat]=useState(editing?.category||(s.categories[0]?.name||'Outros'));
+  const[pm,setPm]=useState(editing?.cardId?'cartao':'conta');
+  const[acctId,setAcctId]=useState(editing?.accountId||s.accounts[0]?.id||'');
+  const[crdId,setCrdId]=useState(editing?.cardId||s.cards[0]?.id||'');
+  const[toId,setToId]=useState(editing?.toAccountId||s.accounts[1]?.id||s.accounts[0]?.id||'');
+  const[date,setDate]=useState(editing?toDateVal(editing.date):toDateVal(new Date().toISOString()));
+  const[desc,setDesc]=useState(editing?.description||'');
+  const[note,setNote]=useState(editing?.note||'');
+  const[inst,setInst]=useState('1');
+  const[err,setErr]=useState('');
+
+  const applyQuick=()=>{
+    if(!quick.trim())return;
+    const r=qParse(quick,s.categories,s.accounts,s.cards);
+    if(r.amount!=null)setAmt(String(r.amount));
+    if(r.category)setCat(r.category);
+    if(r.accountId){setAcctId(r.accountId);setPm('conta');}
+    if(r.cardId){setCrdId(r.cardId);setPm('cartao');}
+    setType(r.type);setDesc(quick.trim());
+  };
+
+  const submit=ev=>{
+    ev.preventDefault();setErr('');
+    const v=parseFloat(String(amt).replace(',','.'));
+    if(!v||v<=0){setErr('Valor inválido.');return;}
+    if(!desc.trim()){setErr('Informe a descrição.');return;}
+    if(type==='transferencia'&&(!acctId||!toId||acctId===toId)){setErr('Escolha duas contas diferentes.');return;}
+    if(editing){
+      s.updTx(editing.id,{description:desc.trim(),category:cat,note,date:fromDateVal(date),amount:isGrp?editing.amount:v});
+    }else{
+      const inp={type,amount:v,category:type==='transferencia'?'Transferência':cat,date:fromDateVal(date),description:desc.trim(),note,installments:type==='despesa'?Math.max(1,parseInt(inst)||1):1};
+      if(type==='transferencia'){inp.accountId=acctId;inp.toAccountId=toId;}
+      else if(pm==='cartao'){inp.cardId=crdId;}
+      else{inp.accountId=acctId;}
+      s.addTx(inp);
+    }
+    onClose();
+  };
+
+  const iN=Math.max(1,parseInt(inst)||1);
+  const amtNum=parseFloat(String(amt).replace(',','.'))||0;
+
+  return(
+    <Modal open onClose={onClose} title={editing?'Editar lançamento':'Novo lançamento'}>
+      <form onSubmit={submit} className="space-y-4">
+        {!editing&&(
+          <div className="bg-panel/60 border border-line rounded-xl p-3">
+            <p className="flex items-center gap-1 text-[11px] text-zinc-500 mb-2"><IWand s={12}/>Texto natural (experimental)</p>
+            <div className="flex gap-2">
+              <input value={quick} onChange={e=>setQuick(e.target.value)} placeholder='Ex: Gastei 80 com comida no Nubank' className="flex-1 rounded-lg bg-panel border border-line px-3 py-2 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-accent"/>
+              <Btn v="secondary" onClick={applyQuick} cls="px-3 py-2 text-xs">Usar</Btn>
+            </div>
+          </div>
+        )}
+        <Seg value={type} onChange={setType} opts={[{v:'despesa',l:'Despesa'},{v:'receita',l:'Receita'},{v:'transferencia',l:'Transfer.'}]}/>
+        <Inp label="Valor (R$)" type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0,00"/>
+        {type!=='transferencia'&&<Sel label="Categoria" value={cat} onChange={e=>setCat(e.target.value)} options={s.categories.map(c=>({v:c.name,l:c.name}))}/>}
+        {type==='transferencia'?(
+          <div className="grid grid-cols-2 gap-3">
+            <Sel label="De" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.length?s.accounts.map(a=>({v:a.id,l:a.name})):[{v:'',l:'(nenhuma)'}]}/>
+            <Sel label="Para" value={toId} onChange={e=>setToId(e.target.value)} options={s.accounts.length?s.accounts.map(a=>({v:a.id,l:a.name})):[{v:'',l:'(nenhuma)'}]}/>
+          </div>
+        ):type==='despesa'?(
+          <div className="space-y-3">
+            <Seg value={pm} onChange={setPm} opts={[{v:'conta',l:'Conta / Dinheiro'},{v:'cartao',l:'Cartão de crédito'}]}/>
+            {pm==='conta'
+              ?(s.accounts.length?<Sel label="Conta" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:a.name}))}/>:<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>)
+              :(s.cards.length?<Sel label="Cartão" value={crdId} onChange={e=>setCrdId(e.target.value)} options={s.cards.map(c=>({v:c.id,l:c.name}))}/>:<p className="text-xs text-warn">Cadastre um cartão primeiro.</p>)}
+          </div>
+        ):(s.accounts.length?<Sel label="Conta de destino" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:a.name}))}/>:<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>)}
+        <Inp label="Data" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+        <Inp label="Descrição" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Ex: Supermercado, Combustível..."/>
+        <Txtarea label="Observação (opcional)" value={note} onChange={e=>setNote(e.target.value)} placeholder="Detalhes..."/>
+        {type==='despesa'&&!editing&&(
+          <div>
+            <Inp label="Parcelas (1 = à vista)" type="number" min="1" max="60" value={inst} onChange={e=>setInst(e.target.value)}/>
+            {iN>1&&amtNum>0&&<p className="text-[11px] text-zinc-500 mt-1.5">{iN}x de {fmtCur(amtNum/iN)} · Total {fmtCur(amtNum)}</p>}
+          </div>
+        )}
+        {isGrp&&<p className="text-[11px] text-warn bg-warn/10 rounded-lg px-3 py-2">Parcelamento — valor fixo por parcela. Para refazer, exclua todas as parcelas.</p>}
+        {err&&<p className="text-danger text-sm">{err}</p>}
+        <Btn type="submit" cls="w-full">{editing?'Salvar alterações':'Adicionar lançamento'}</Btn>
+      </form>
+    </Modal>
+  );
+}
+
+function TxActions({tx,onClose,onEdit}){
+  const s=useS();
+  if(!tx)return null;
+  return(
+    <Modal open onClose={onClose} title="Detalhes do lançamento">
+      <div className="space-y-4">
+        <div className="bg-panel rounded-xl p-4">
+          <p className={cx('text-2xl font-bold',tx.type==='receita'?'text-accent':tx.type==='despesa'?'text-danger':'text-white')}>{tx.type==='receita'?'+':tx.type==='despesa'?'-':''}{fmtCur(tx.amount)}</p>
+          <p className="text-base text-white font-medium mt-1">{tx.description}</p>
+          <p className="text-sm text-zinc-400 mt-1">{tx.category} · {fmtDate(tx.date)}</p>
+          {tx.installmentTotal&&<p className="text-xs text-zinc-500 mt-1">Parcela {tx.installmentIndex} de {tx.installmentTotal}</p>}
+          {tx.note&&<p className="text-xs text-zinc-500 mt-2 bg-panel border border-line rounded-lg p-2">{tx.note}</p>}
+        </div>
+        <div className="flex flex-col gap-2">
+          <Btn v="secondary" onClick={()=>{onEdit(tx);onClose();}} cls="w-full"><IEdit s={15}/>Editar</Btn>
+          <Btn v="danger" cls="w-full" onClick={()=>{
+            if(tx.installmentGroupId){if(confirm('Excluir TODAS as parcelas deste parcelamento?')){s.delGrp(tx.installmentGroupId);onClose();}}
+            else{if(confirm('Excluir este lançamento?')){s.delTx(tx.id);onClose();}}
+          }}><ITrash s={15}/>{tx.installmentGroupId?'Excluir todas as parcelas':'Excluir'}</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function InvPayForm({card,monthKey,onClose}){
+  const s=useS();
+  const[fromId,setFromId]=useState(s.accounts[0]?.id||'');
+  const[date,setDate]=useState(toDateVal(new Date().toISOString()));
+  const total=invTotal(card.id,monthKey,s.transactions);
+  const fromAcct=s.accounts.find(a=>a.id===fromId);
+  const fromBal=fromAcct?acctBal(fromAcct,s.transactions):0;
+  return(
+    <Modal open onClose={onClose} title="Pagar fatura">
+      <div className="space-y-4">
+        <div className="bg-panel rounded-xl p-4 text-center">
+          <p className="text-xs text-zinc-500">Total da fatura</p>
+          <p className="text-2xl font-bold text-white mt-1">{fmtCur(total)}</p>
+          <p className="text-xs text-zinc-500 mt-1">{card.name} · {monthKey}</p>
+        </div>
+        {s.accounts.length?(
+          <>
+            <Sel label="Débitar de" value={fromId} onChange={e=>setFromId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:`${a.name} (saldo: ${fmtCur(acctBal(a,s.transactions))})`}))}/>
+            {fromBal<total&&<p className="text-xs text-warn bg-warn/10 rounded-lg px-3 py-2">⚠ Saldo insuficiente — a conta ficará negativa.</p>}
+            <Inp label="Data do pagamento" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+            <Btn cls="w-full" onClick={()=>{s.payInv(card.id,monthKey,fromId,fromDateVal(date));onClose();}}><IChk s={15}/>Confirmar pagamento de {fmtCur(total)}</Btn>
+          </>
+        ):<p className="text-xs text-warn text-center py-4">Cadastre uma conta para realizar pagamentos.</p>}
+      </div>
+    </Modal>
+  );
+}
+
+function BillForm({editing,onClose}){
+  const s=useS();
+  const[name,setName]=useState(editing?.name||'');
+  const[amt,setAmt]=useState(editing?String(editing.amount):'');
+  const[cat,setCat]=useState(editing?.category||'Moradia');
+  const[day,setDay]=useState(editing?String(editing.dueDay):'10');
+  const[acctId,setAcctId]=useState(editing?.accountId||s.accounts[0]?.id||'');
+  const[active,setActive]=useState(editing?.active!==false);
+  const[err,setErr]=useState('');
+  const submit=ev=>{
+    ev.preventDefault();setErr('');
+    const v=parseFloat(String(amt).replace(',','.'));
+    if(!name.trim()){setErr('Informe o nome.');return;}
+    if(!v||v<=0){setErr('Valor inválido.');return;}
+    const b={name:name.trim(),amount:v,category:cat,dueDay:Math.max(1,Math.min(31,parseInt(day)||10)),accountId:acctId,active};
+    if(editing)s.updBill(editing.id,b);else s.addBill(b);
+    onClose();
+  };
+  return(
+    <Modal open onClose={onClose} title={editing?'Editar conta recorrente':'Nova conta recorrente'}>
+      <form onSubmit={submit} className="space-y-4">
+        <Inp label="Nome" value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Netflix, Aluguel, Internet"/>
+        <Inp label="Valor (R$)" type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)}/>
+        <Sel label="Categoria" value={cat} onChange={e=>setCat(e.target.value)} options={s.categories.map(c=>({v:c.name,l:c.name}))}/>
+        <Inp label="Dia de vencimento (todo mês)" type="number" min="1" max="31" value={day} onChange={e=>setDay(e.target.value)}/>
+        {s.accounts.length?<Sel label="Conta" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:a.name}))}/>:<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>}
+        <Toggle value={active} onChange={setActive} label="Conta ativa"/>
+        {err&&<p className="text-danger text-sm">{err}</p>}
+        <Btn type="submit" cls="w-full">{editing?'Salvar':'Criar conta recorrente'}</Btn>
+      </form>
+    </Modal>
+  );
+}
+
+function SalaryForm({editing,onClose}){
+  const s=useS();
+  const[desc,setDesc]=useState(editing?.description||'Salário');
+  const[amt,setAmt]=useState(editing?String(editing.amount):'');
+  const[day,setDay]=useState(editing?String(editing.payDay):'5');
+  const[acctId,setAcctId]=useState(editing?.accountId||s.accounts[0]?.id||'');
+  const[active,setActive]=useState(editing?.active!==false);
+  const[err,setErr]=useState('');
+  const submit=ev=>{
+    ev.preventDefault();setErr('');
+    const v=parseFloat(String(amt).replace(',','.'));
+    if(!v||v<=0){setErr('Valor inválido.');return;}
+    const sl={description:desc.trim()||'Salário',amount:v,payDay:Math.max(1,Math.min(31,parseInt(day)||5)),accountId:acctId,active};
+    if(editing)s.updSal(editing.id,sl);else s.addSal(sl);
+    onClose();
+  };
+  return(
+    <Modal open onClose={onClose} title={editing?'Editar salário':'Cadastrar salário'}>
+      <form onSubmit={submit} className="space-y-4">
+        <Inp label="Descrição" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Ex: Salário CLT"/>
+        <Inp label="Valor líquido (R$)" type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)}/>
+        <Inp label="Dia previsto de recebimento" type="number" min="1" max="31" value={day} onChange={e=>setDay(e.target.value)}/>
+        {s.accounts.length?<Sel label="Conta de destino" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:a.name}))}/>:<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>}
+        <Toggle value={active} onChange={setActive} label="Ativo (gera receita todo mês)"/>
+        {err&&<p className="text-danger text-sm">{err}</p>}
+        <Btn type="submit" cls="w-full">{editing?'Salvar':'Cadastrar salário'}</Btn>
+      </form>
+    </Modal>
+  );
+}
+
+/* ═══════════════════════════════════════
+   SCREEN: LOGIN
+═══════════════════════════════════════ */
+function LoginScreen(){
+  const s=useS();
+  const has=!!s.settings;
+  const[user,setUser]=useState('');
+  const[pwd,setPwd]=useState('');
+  const[conf,setConf]=useState('');
+  const[err,setErr]=useState('');
+  const[loading,setLoading]=useState(false);
+  const submit=async ev=>{
+    ev.preventDefault();setErr('');
+    if(!user.trim()||!pwd){setErr('Preencha todos os campos.');return;}
+    setLoading(true);
+    if(!has){
+      if(pwd!==conf){setErr('Senhas não coincidem.');setLoading(false);return;}
+      if(pwd.length<4){setErr('Senha mínima: 4 caracteres.');setLoading(false);return;}
+      await s.createAcc(user.trim(),pwd);
+    }else{
+      const ok=await s.doLogin(user.trim(),pwd);
+      if(!ok){setErr('Usuário ou senha incorretos.');setLoading(false);}
+    }
+  };
+  return(
+    <div className="min-h-screen flex flex-col justify-center px-6">
+      <div className="max-w-sm w-full mx-auto fu">
+        <div className="flex flex-col items-center mb-8">
+          <div className="w-16 h-16 rounded-2xl bg-accent/15 flex items-center justify-center mb-4"><IWallet s={28} cls="text-accent"/></div>
+          <h1 className="text-2xl font-bold text-white">Meu Financeiro</h1>
+          <p className="text-zinc-500 text-sm mt-1 text-center">{has?'Entre para continuar':'Crie sua conta local para começar'}</p>
+        </div>
+        <form onSubmit={submit} className="space-y-3">
+          <Inp label="Usuário" value={user} onChange={e=>setUser(e.target.value)} placeholder="Seu nome" autoComplete="username"/>
+          <Inp label="Senha" type="password" value={pwd} onChange={e=>setPwd(e.target.value)} placeholder="••••••" autoComplete={has?'current-password':'new-password'}/>
+          {!has&&<Inp label="Confirmar senha" type="password" value={conf} onChange={e=>setConf(e.target.value)} placeholder="••••••"/>}
+          {err&&<p className="text-danger text-sm">{err}</p>}
+          <Btn type="submit" cls="w-full mt-2" disabled={loading}>{loading?'Aguarde...':has?'Entrar':'Criar conta e começar'}</Btn>
+        </form>
+        <p className="text-zinc-600 text-xs text-center mt-6">Dados salvos apenas neste dispositivo (localStorage).</p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   SCREEN: DASHBOARD
+═══════════════════════════════════════ */
+function DashboardScreen({nav}){
+  const s=useS();
+  const mk=curMk();
+  const liq=useMemo(()=>liquidBal(s.accounts,s.transactions),[s.accounts,s.transactions]);
+  const tot=useMemo(()=>totalBal(s.accounts,s.transactions),[s.accounts,s.transactions]);
+  const inc=useMemo(()=>mthInc(s.transactions,mk),[s.transactions,mk]);
+  const exp=useMemo(()=>mthExp(s.transactions,mk),[s.transactions,mk]);
+  const cats=useMemo(()=>expByCat(s.transactions,mk),[s.transactions,mk]);
+  const cardsUsed=useMemo(()=>s.cards.reduce((sum,c)=>sum+cardUsed(c,s.transactions,s.invoicePayments),0),[s.cards,s.transactions,s.invoicePayments]);
+  const cardsLimit=useMemo(()=>s.cards.reduce((sum,c)=>sum+c.limit,0),[s.cards]);
+  const futInst=useMemo(()=>s.transactions.filter(t=>t.installmentGroupId&&t.date.slice(0,7)>mk).reduce((s,t)=>s+t.amount,0),[s.transactions,mk]);
+  const upcoming=useMemo(()=>{
+    const now=new Date(),lim=new Date();lim.setDate(lim.getDate()+10);
+    return s.transactions.filter(t=>t.recurringId&&t.type==='despesa').filter(t=>{const d=new Date(t.date);return d>=now&&d<=lim;}).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,4);
+  },[s.transactions]);
+  const upInvoices=useMemo(()=>s.cards.map(c=>{
+    const cmk=invMkOf(new Date(),c.closingDay);
+    return{card:c,mk:cmk,total:invTotal(c.id,cmk,s.transactions),due:invDueDate(cmk,c.closingDay,c.dueDay),status:invStat(c,cmk,s.invoicePayments)};
+  }).filter(i=>i.total>0&&i.status!=='paga'),[s.cards,s.transactions,s.invoicePayments]);
+  const recent=useMemo(()=>[...s.transactions].filter(t=>!t.isInvoicePayment).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5),[s.transactions]);
+  const isEmpty=!s.accounts.length&&!s.cards.length&&!s.transactions.length;
+
+  return(
+    <div className="px-4 pt-5 pb-2 max-w-md mx-auto">
+      <header className="flex items-center justify-between mb-5">
+        <div><p className="text-zinc-500 text-xs">Olá,</p><h1 className="text-xl font-bold text-white">{s.settings?.username||'Usuário'} 👋</h1></div>
+        <div className="w-10 h-10 rounded-full bg-accent/15 flex items-center justify-center"><IHome s={18} cls="text-accent"/></div>
+      </header>
+      {isEmpty?(
+        <Empty icon={<IWallet s={40}/>} title="Comece cadastrando uma conta" sub="Adicione suas contas e cartões para controlar seu dinheiro em tempo real."
+          action={<Btn onClick={()=>nav('contas')} v="ghost" cls="text-accent">Ir para Contas →</Btn>}/>
+      ):(
+        <>
+          <div className="bg-card rounded-2xl border border-line p-5 mb-4">
+            <p className="text-xs text-zinc-500 mb-1">Saldo disponível</p>
+            <p className="text-3xl font-bold text-white tracking-tight">{fmtCur(liq)}</p>
+            <p className="text-xs text-zinc-500 mt-2">Patrimônio total: <span className="text-white font-medium">{fmtCur(tot)}</span></p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <StatCard label="Receitas do mês" value={fmtCur(inc)} tone="pos" icon={<IDown s={14} cls="text-accent"/>}/>
+            <StatCard label="Gastos do mês" value={fmtCur(exp)} tone="neg" icon={<IUp s={14} cls="text-danger"/>}/>
+            <StatCard label="Em cartões" value={fmtCur(cardsUsed)} sub={`Limite: ${fmtCur(cardsLimit)}`} icon={<ICrd s={14}/>}/>
+            <StatCard label="Parcelas futuras" value={fmtCur(futInst)} icon={<IClock s={14}/>}/>
+          </div>
+          {cats.length>0&&(
+            <div className="bg-card rounded-2xl border border-line p-4 mb-4">
+              <p className="text-sm font-semibold text-white mb-3">Gastos por categoria</p>
+              <CatBars items={cats.slice(0,6)}/>
+            </div>
+          )}
+          {upInvoices.length>0&&(
+            <div className="bg-card rounded-2xl border border-line p-4 mb-4">
+              <p className="text-sm font-semibold text-white mb-3">Faturas em aberto</p>
+              <div className="space-y-3">
+                {upInvoices.map(i=>(
+                  <div key={i.card.id} className="flex items-center justify-between">
+                    <div><p className="text-sm text-white font-medium">{i.card.name}</p><p className="text-xs text-zinc-500">Vence {fmtDate(i.due.toISOString())}</p></div>
+                    <span className={cx('text-sm font-semibold',i.status==='fechada'?'text-warn':'text-white')}>{fmtCur(i.total)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {upcoming.length>0&&(
+            <div className="bg-card rounded-2xl border border-line p-4 mb-4">
+              <p className="text-sm font-semibold text-white mb-3">Contas nos próximos 10 dias</p>
+              <div className="space-y-3">
+                {upcoming.map(tx=>(
+                  <div key={tx.id} className="flex items-center justify-between">
+                    <div><p className="text-sm text-white font-medium">{tx.description}</p><p className="text-xs text-zinc-500">{fmtDate(tx.date)}</p></div>
+                    <span className="text-sm font-semibold text-danger">{fmtCur(tx.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="bg-card rounded-2xl border border-line p-4">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-sm font-semibold text-white">Últimas movimentações</p>
+              <button onClick={()=>nav('movimentacoes')} className="text-accent text-xs font-semibold">Ver tudo</button>
+            </div>
+            {recent.length===0?<Empty icon={<IReceipt s={28}/>} title="Sem movimentações ainda"/>:(
+              <div className="divide-line">
+                {recent.map(tx=>{const a=s.accounts.find(a=>a.id===tx.accountId);return<TxRow key={tx.id} tx={tx} accName={a?.name}/>;  })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   SCREEN: MOVIMENTAÇÕES
+═══════════════════════════════════════ */
+function MovScreen(){
+  const s=useS();
+  const[filter,setFilter]=useState('todos');
+  const[showForm,setShowForm]=useState(false);
+  const[editTx,setEditTx]=useState(null);
+  const[actTx,setActTx]=useState(null);
+  const txs=useMemo(()=>[...s.transactions].filter(t=>!t.isInvoicePayment).filter(t=>filter==='todos'||t.type===filter).sort((a,b)=>b.date.localeCompare(a.date)),[s.transactions,filter]);
+  return(
+    <div className="px-4 pt-5 max-w-md mx-auto">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-bold text-white">Movimentações</h1>
+        <Btn onClick={()=>{setEditTx(null);setShowForm(true);}} cls="px-3 py-2 text-xs"><IPlus s={15}/>Novo</Btn>
+      </div>
+      <div className="mb-4"><Seg value={filter} onChange={setFilter} opts={[{v:'todos',l:'Todos'},{v:'receita',l:'Receitas'},{v:'despesa',l:'Despesas'},{v:'transferencia',l:'Transfer.'}]}/></div>
+      <div className="bg-card rounded-2xl border border-line p-4">
+        {txs.length===0?<Empty icon={<IReceipt s={32}/>} title="Nenhuma movimentação" sub='Toque em "Novo" para lançar.'/>:(
+          <div className="divide-line">
+            {txs.map(tx=>{const a=s.accounts.find(a=>a.id===tx.accountId);return<TxRow key={tx.id} tx={tx} accName={a?.name} onClick={()=>setActTx(tx)}/>;  })}
+          </div>
+        )}
+      </div>
+      {showForm&&<TxForm editing={editTx} onClose={()=>{setShowForm(false);setEditTx(null);}}/>}
+      {actTx&&<TxActions tx={actTx} onClose={()=>setActTx(null)} onEdit={tx=>{setActTx(null);setEditTx(tx);setShowForm(true);}}/>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   SCREEN: CONTAS
+═══════════════════════════════════════ */
+function ContasScreen(){
+  const s=useS();
+  const[tab,setTab]=useState('contas');
+  const[showAcct,setShowAcct]=useState(false);
+  const[editAcct,setEditAcct]=useState(null);
+  const[showBill,setShowBill]=useState(false);
+  const[editBill,setEditBill]=useState(null);
+  const[showSal,setShowSal]=useState(false);
+  const[editSal,setEditSal]=useState(null);
+
+  const openNew=()=>{
+    if(tab==='contas'){setEditAcct(null);setShowAcct(true);}
+    else if(tab==='recorrentes'){setEditBill(null);setShowBill(true);}
+    else{setEditSal(null);setShowSal(true);}
+  };
+
+  return(
+    <div className="px-4 pt-5 max-w-md mx-auto">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-bold text-white">Contas</h1>
+        <Btn onClick={openNew} cls="px-3 py-2 text-xs"><IPlus s={15}/>Novo</Btn>
+      </div>
+      <div className="mb-4"><Seg value={tab} onChange={setTab} opts={[{v:'contas',l:'Contas'},{v:'recorrentes',l:'Recorrentes'},{v:'salarios',l:'Salário'}]}/></div>
+
+      {tab==='contas'&&(
+        <div className="space-y-3">
+          {!s.accounts.filter(a=>!a.archived).length?<Empty icon={<IBank s={32}/>} title="Nenhuma conta" sub="Adicione bancos, dinheiro físico, VR e benefícios."/>
+            :s.accounts.filter(a=>!a.archived).map(a=><AcctRow key={a.id} account={a} balance={acctBal(a,s.transactions)} onClick={()=>{setEditAcct(a);setShowAcct(true);}}/>)}
+          {s.accounts.filter(a=>!a.archived).length>1&&(
+            <div className="bg-card rounded-2xl border border-line p-4 flex justify-between items-center">
+              <span className="text-xs text-zinc-500">Total líquido disponível</span>
+              <span className={cx('text-base font-bold',liquidBal(s.accounts,s.transactions)<0?'text-danger':'text-accent')}>{fmtCur(liquidBal(s.accounts,s.transactions))}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==='recorrentes'&&(
+        <div className="space-y-3">
+          {!s.recurringBills.length?<Empty icon={<IRep s={32}/>} title="Nenhuma conta recorrente" sub="Cadastre Netflix, aluguel, internet, academia etc."/>
+            :s.recurringBills.map(b=>(
+            <div key={b.id} className="bg-card border border-line rounded-2xl p-4 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2"><p className="text-sm font-semibold text-white truncate">{b.name}</p>{!b.active&&<span className="text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5">Pausada</span>}</div>
+                <p className="text-xs text-zinc-500">{b.category} · Todo dia {b.dueDay}</p>
+              </div>
+              <span className="text-sm font-bold text-white shrink-0">{fmtCur(b.amount)}</span>
+              <IBt onClick={()=>{setEditBill(b);setShowBill(true);}}><IEdit s={15}/></IBt>
+              <IBt onClick={()=>{if(confirm('Excluir esta conta recorrente?'))s.delBill(b.id);}}><ITrash s={15} cls="text-danger"/></IBt>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab==='salarios'&&(
+        <div className="space-y-3">
+          {!s.salaries.length?<Empty icon={<IWallet s={32}/>} title="Nenhum salário cadastrado" sub="Cadastre seu salário para gerar receita automática todo mês."/>
+            :s.salaries.map(sl=>(
+            <div key={sl.id} className="bg-card border border-line rounded-2xl p-4 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2"><p className="text-sm font-semibold text-white truncate">{sl.description}</p>{!sl.active&&<span className="text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5">Pausado</span>}</div>
+                <p className="text-xs text-zinc-500">Todo dia {sl.payDay}</p>
+              </div>
+              <span className="text-sm font-bold text-accent shrink-0">{fmtCur(sl.amount)}</span>
+              <IBt onClick={()=>{setEditSal(sl);setShowSal(true);}}><IEdit s={15}/></IBt>
+              <IBt onClick={()=>{if(confirm('Excluir este salário?'))s.delSal(sl.id);}}><ITrash s={15} cls="text-danger"/></IBt>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showAcct&&<AcctForm editing={editAcct} onClose={()=>{setShowAcct(false);setEditAcct(null);}}/>}
+      {showBill&&<BillForm editing={editBill} onClose={()=>{setShowBill(false);setEditBill(null);}}/>}
+      {showSal&&<SalaryForm editing={editSal} onClose={()=>{setShowSal(false);setEditSal(null);}}/>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   SCREEN: CARTÕES
+═══════════════════════════════════════ */
+function CartoesScreen(){
+  const s=useS();
+  const[showForm,setShowForm]=useState(false);
+  const[editCard,setEditCard]=useState(null);
+  const[selCard,setSelCard]=useState(null);
+  const[payData,setPayData]=useState(null);
+
+  return(
+    <div className="px-4 pt-5 max-w-md mx-auto">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-bold text-white">Cartões</h1>
+        <Btn onClick={()=>{setEditCard(null);setShowForm(true);}} cls="px-3 py-2 text-xs"><IPlus s={15}/>Novo</Btn>
+      </div>
+      {!s.cards.length?<Empty icon={<ICrd s={40}/>} title="Nenhum cartão de crédito" sub="Adicione seus cartões para controlar faturas e limites."/>:(
+        <div className="space-y-3">
+          {s.cards.map(card=>{
+            const cmk=invMkOf(new Date(),card.closingDay);
+            const used=cardUsed(card,s.transactions,s.invoicePayments);
+            const avail=Math.round((card.limit-used)*100)/100;
+            const ci=invTotal(card.id,cmk,s.transactions);
+            const st=invStat(card,cmk,s.invoicePayments);
+            const expanded=selCard===card.id;
+            return(
+              <div key={card.id}>
+                <CardTile card={card} used={used} available={avail} currentInv={ci} status={st} onClick={()=>setSelCard(expanded?null:card.id)}/>
+                {expanded&&(
+                  <div className="bg-panel border border-t-0 border-line rounded-b-2xl p-4 space-y-3 -mt-2 pt-5">
+                    <div className="flex gap-2">
+                      <Btn v="secondary" cls="flex-1 text-xs" onClick={()=>{setEditCard(card);setShowForm(true);setSelCard(null);}}><IEdit s={14}/>Editar</Btn>
+                      <Btn v="danger" cls="flex-1 text-xs" onClick={()=>{if(confirm('Excluir cartão e todos os seus dados?')){s.delCard(card.id);setSelCard(null);}}}><ITrash s={14}/>Excluir</Btn>
+                    </div>
+                    {ci>0&&st!=='paga'&&(
+                      <Btn cls="w-full" onClick={()=>{setPayData({card,mk:cmk});setSelCard(null);}}><IChk s={15}/>Pagar fatura ({fmtCur(ci)})</Btn>
+                    )}
+                    {s.transactions.filter(t=>t.invoiceId===card.id+'_'+cmk&&!t.isInvoicePayment).length>0&&(
+                      <div>
+                        <p className="text-xs font-medium text-zinc-500 mb-2">Compras da fatura atual</p>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {s.transactions.filter(t=>t.invoiceId===card.id+'_'+cmk&&!t.isInvoicePayment).sort((a,b)=>b.date.localeCompare(a.date)).map(tx=>(
+                            <div key={tx.id} className="flex justify-between text-xs">
+                              <span className="text-zinc-400 truncate pr-2">{tx.description} <span className="text-zinc-600">{tx.installmentTotal?`(${tx.installmentIndex}/${tx.installmentTotal})`:''}· {fmtDate(tx.date)}</span></span>
+                              <span className="text-white shrink-0">{fmtCur(tx.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {showForm&&<CardForm editing={editCard} onClose={()=>{setShowForm(false);setEditCard(null);}}/>}
+      {payData&&<InvPayForm card={payData.card} monthKey={payData.mk} onClose={()=>setPayData(null)}/>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   SCREEN: RELATÓRIOS
+═══════════════════════════════════════ */
+function RelScreen(){
+  const s=useS();
+  const[period,setPeriod]=useState('mes');
+  const[viewMk,setViewMk]=useState(curMk());
+  const mk=curMk();
+
+  const txsInPeriod=useMemo(()=>{
+    if(period==='mes')return mthTxs(s.transactions,viewMk);
+    const now=new Date();let from,to;
+    if(period==='hoje'){from=new Date(now.getFullYear(),now.getMonth(),now.getDate());to=new Date(from);to.setDate(to.getDate()+1);}
+    else if(period==='semana'){const dw=now.getDay();from=new Date(now);from.setDate(from.getDate()-(dw===0?6:dw-1));to=new Date(from);to.setDate(to.getDate()+7);}
+    else{from=new Date(now.getFullYear(),0,1);to=new Date(now.getFullYear()+1,0,1);}
+    return s.transactions.filter(t=>!t.isInvoicePayment&&new Date(t.date)>=from&&new Date(t.date)<to);
+  },[s.transactions,period,viewMk]);
+
+  const inc=useMemo(()=>txsInPeriod.filter(t=>t.type==='receita').reduce((s,t)=>s+t.amount,0),[txsInPeriod]);
+  const exp=useMemo(()=>txsInPeriod.filter(t=>t.type==='despesa').reduce((s,t)=>s+t.amount,0),[txsInPeriod]);
+  const cats=useMemo(()=>{const m={};txsInPeriod.filter(t=>t.type==='despesa').forEach(t=>m[t.category]=(m[t.category]||0)+t.amount);return Object.entries(m).map(([c,v])=>({c,v})).sort((a,b)=>b.v-a.v);},[txsInPeriod]);
+
+  const evolution=useMemo(()=>Array.from({length:6},(_,i)=>{
+    const k=addMths(mk,i-5);
+    const label=k.split('-').reverse().join('/').slice(0,5);
+    return{label,receitas:mthInc(s.transactions,k),despesas:mthExp(s.transactions,k)};
+  }),[s.transactions]);
+
+  const maxEvo=Math.max(1,...evolution.map(e=>Math.max(e.receitas,e.despesas)));
+
+  return(
+    <div className="px-4 pt-5 max-w-md mx-auto">
+      <h1 className="text-xl font-bold text-white mb-4">Relatórios</h1>
+      <div className="mb-4"><Seg value={period} onChange={v=>{setPeriod(v);if(v==='mes')setViewMk(curMk());}} opts={[{v:'hoje',l:'Hoje'},{v:'semana',l:'Semana'},{v:'mes',l:'Mês'},{v:'ano',l:'Ano'}]}/></div>
+
+      {period==='mes'&&(
+        <div className="flex items-center justify-between mb-4">
+          <button onClick={()=>setViewMk(p=>addMths(p,-1))} className="text-accent text-sm font-medium px-2">‹ Anterior</button>
+          <span className="text-white text-sm font-semibold capitalize">{new Date(viewMk+'-15').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}</span>
+          <button onClick={()=>setViewMk(p=>addMths(p,1))} className="text-accent text-sm font-medium px-2">Próximo ›</button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <StatCard label="Receitas" value={fmtCur(inc)} tone="pos"/>
+        <StatCard label="Despesas" value={fmtCur(exp)} tone="neg"/>
+        <StatCard label="Saldo" value={fmtCur(inc-exp)} tone={inc-exp>=0?'pos':'neg'}/>
+      </div>
+
+      {cats.length>0&&(
+        <div className="bg-card rounded-2xl border border-line p-4 mb-4">
+          <p className="text-sm font-semibold text-white mb-3">Despesas por categoria</p>
+          <CatBars items={cats}/>
+        </div>
+      )}
+
+      <div className="bg-card rounded-2xl border border-line p-4 mb-4">
+        <p className="text-sm font-semibold text-white mb-4">Evolução mensal (6 meses)</p>
+        <div className="flex items-end justify-between gap-2 h-28">
+          {evolution.map((d,i)=>(
+            <div key={i} className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end">
+              <div className="w-full flex items-end justify-center gap-0.5 flex-1">
+                <div className="flex-1 rounded-t bg-accent/70 transition-all" style={{height:(d.receitas/maxEvo*100)+'%',minHeight:d.receitas>0?'3px':'0'}}/>
+                <div className="flex-1 rounded-t bg-danger/60 transition-all" style={{height:(d.despesas/maxEvo*100)+'%',minHeight:d.despesas>0?'3px':'0'}}/>
+              </div>
+              <span className="text-[9px] text-zinc-500">{d.label}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-4 mt-3 text-[10px] text-zinc-500">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent/70 inline-block"/>Receitas</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-danger/60 inline-block"/>Despesas</span>
+        </div>
+      </div>
+
+      {txsInPeriod.length>0&&(
+        <div className="bg-card rounded-2xl border border-line p-4">
+          <p className="text-sm font-semibold text-white mb-3">Lançamentos do período ({txsInPeriod.length})</p>
+          <div className="divide-line max-h-72 overflow-y-auto">
+            {[...txsInPeriod].sort((a,b)=>b.date.localeCompare(a.date)).map(tx=>{
+              const a=s.accounts.find(a=>a.id===tx.accountId);
+              return<TxRow key={tx.id} tx={tx} accName={a?.name}/>;
+            })}
+          </div>
+        </div>
+      )}
+      {txsInPeriod.length===0&&<Empty icon={<IChart s={32}/>} title="Sem dados neste período"/>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   SCREEN: CONFIGURAÇÕES
+═══════════════════════════════════════ */
+function ConfigScreen(){
+  const s=useS();
+  const[tab,setTab]=useState('perfil');
+  const[user,setUser]=useState(s.settings?.username||'');
+  const[pwd,setPwd]=useState('');
+  const[npwd,setNpwd]=useState('');
+  const[cpwd,setCpwd]=useState('');
+  const[newCat,setNewCat]=useState('');
+  const[msg,setMsg]=useState('');
+  const showMsg=m=>{setMsg(m);setTimeout(()=>setMsg(''),2500);};
+
+  const doExport=()=>{
+    const blob=new Blob([s.expData()],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='meu-financeiro-backup.json';a.click();
+    showMsg('Backup exportado com sucesso!');
+  };
+  const doImport=ev=>{
+    const file=ev.target.files[0];if(!file)return;
+    const reader=new FileReader();reader.onload=e=>s.impData(e.target.result);reader.readAsText(file);ev.target.value='';
+  };
+
+  return(
+    <div className="px-4 pt-5 max-w-md mx-auto">
+      <h1 className="text-xl font-bold text-white mb-4">Configurações</h1>
+      {msg&&<div className="bg-accent/15 border border-accent/30 rounded-xl px-4 py-3 text-sm text-accent mb-4 fu">{msg}</div>}
+      <div className="mb-4"><Seg value={tab} onChange={setTab} opts={[{v:'perfil',l:'Perfil'},{v:'cats',l:'Categorias'},{v:'dados',l:'Dados'}]}/></div>
+
+      {tab==='perfil'&&(
+        <div className="space-y-4">
+          <div className="bg-card rounded-2xl border border-line p-4 space-y-3">
+            <p className="text-sm font-semibold text-white">Dados do usuário</p>
+            <Inp label="Nome de usuário" value={user} onChange={e=>setUser(e.target.value)}/>
+            <Btn v="secondary" cls="w-full" onClick={()=>{s.chgUser(user);showMsg('Nome atualizado.');}}>Salvar nome</Btn>
+          </div>
+          <div className="bg-card rounded-2xl border border-line p-4 space-y-3">
+            <p className="text-sm font-semibold text-white">Alterar senha</p>
+            <Inp label="Senha atual" type="password" value={pwd} onChange={e=>setPwd(e.target.value)} placeholder="••••••"/>
+            <Inp label="Nova senha" type="password" value={npwd} onChange={e=>setNpwd(e.target.value)} placeholder="••••••"/>
+            <Inp label="Confirmar nova senha" type="password" value={cpwd} onChange={e=>setCpwd(e.target.value)} placeholder="••••••"/>
+            <Btn v="secondary" cls="w-full" onClick={async()=>{
+              if(!npwd||npwd!==cpwd){showMsg('Senhas não coincidem.');return;}
+              if(npwd.length<4){showMsg('Senha mínima: 4 caracteres.');return;}
+              const ok=await s.doLogin(s.settings?.username||'',pwd);
+              if(!ok){showMsg('Senha atual incorreta.');return;}
+              await s.chgPwd(npwd);setPwd('');setNpwd('');setCpwd('');showMsg('Senha alterada com sucesso!');
+            }}>Alterar senha</Btn>
+          </div>
+          <Btn v="ghost" onClick={s.logout} cls="w-full text-danger border border-danger/20"><ILogout s={16}/>Sair da conta</Btn>
+        </div>
+      )}
+
+      {tab==='cats'&&(
+        <div className="space-y-4">
+          <div className="bg-card rounded-2xl border border-line p-4 space-y-3">
+            <p className="text-sm font-semibold text-white">Nova categoria</p>
+            <div className="flex gap-2">
+              <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&newCat.trim()){s.addCat(newCat.trim());setNewCat('');}}} placeholder="Nome da categoria" className="flex-1 rounded-xl bg-panel border border-line px-3.5 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-accent"/>
+              <Btn onClick={()=>{if(newCat.trim()){s.addCat(newCat.trim());setNewCat('');}}}>Adicionar</Btn>
+            </div>
+          </div>
+          <div className="bg-card rounded-2xl border border-line p-4">
+            <p className="text-sm font-semibold text-white mb-3">Categorias ({s.categories.length})</p>
+            <div className="space-y-1 max-h-80 overflow-y-auto">
+              {s.categories.map(c=>(
+                <div key={c.id} className="flex items-center justify-between py-2 border-b border-line last:border-0">
+                  <span className="text-sm text-zinc-300">{c.name}</span>
+                  {!c.isDefault&&<IBt onClick={()=>{if(confirm('Excluir categoria?'))s.delCat(c.id);}}><ITrash s={14} cls="text-danger"/></IBt>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==='dados'&&(
+        <div className="space-y-4">
+          <div className="bg-card rounded-2xl border border-line p-4 space-y-3">
+            <p className="text-sm font-semibold text-white">Backup de dados</p>
+            <p className="text-xs text-zinc-500">Exporte seus dados em JSON para fazer backup ou migrar entre dispositivos.</p>
+            <Btn v="secondary" cls="w-full" onClick={doExport}><IDownload s={16}/>Exportar JSON</Btn>
+            <input type="file" accept=".json" onChange={doImport} className="hidden" id="imp-file"/>
+            <Btn v="secondary" cls="w-full" onClick={()=>document.getElementById('imp-file').click()}><IUpload s={16}/>Importar JSON</Btn>
+          </div>
+          <div className="bg-danger/10 border border-danger/30 rounded-2xl p-4 space-y-3">
+            <p className="text-sm font-semibold text-danger flex items-center gap-2"><IAlert s={16}/>Zona de perigo</p>
+            <p className="text-xs text-zinc-500">Apaga todas as contas, cartões, transações e configurações financeiras. Irreversível.</p>
+            <Btn v="danger" cls="w-full" onClick={()=>{if(confirm('Apagar TODOS os dados financeiros? Esta ação não pode ser desfeita.'))s.clrData();}}><ITrash s={16}/>Apagar todos os dados</Btn>
+          </div>
+          <div className="bg-card rounded-2xl border border-line p-4 text-center">
+            <p className="text-xs text-zinc-600">Meu Financeiro v1.0 · Dados locais · {new Date().getFullYear()}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   ROOT APP
+═══════════════════════════════════════ */
+const NAV=[
+  {id:'dashboard',label:'Início',icon:<IHome s={20}/>},
+  {id:'movimentacoes',label:'Lançar',icon:<ISwap s={20}/>},
+  {id:'contas',label:'Contas',icon:<IBank s={20}/>},
+  {id:'cartoes',label:'Cartões',icon:<ICrd s={20}/>},
+  {id:'relatorios',label:'Relatórios',icon:<IChart s={20}/>},
+  {id:'config',label:'Ajustes',icon:<IGear s={20}/>},
+];
+
+function Main(){
+  const s=useS();
+  const[screen,setScreen]=useState('dashboard');
+  if(!s.auth)return<LoginScreen/>;
+  const screens={
+    dashboard:<DashboardScreen nav={setScreen}/>,
+    movimentacoes:<MovScreen/>,
+    contas:<ContasScreen/>,
+    cartoes:<CartoesScreen/>,
+    relatorios:<RelScreen/>,
+    config:<ConfigScreen/>,
+  };
+  return(
+    <div className="min-h-screen flex flex-col">
+      <main className="flex-1 overflow-y-auto" style={{paddingBottom:'5.5rem'}}>
+        <div className="fu" key={screen}>{screens[screen]||screens.dashboard}</div>
+      </main>
+      <nav className="fixed bottom-0 left-0 right-0 bg-panel/95 backdrop-blur-md border-t border-line z-40" style={{paddingBottom:'env(safe-area-inset-bottom,0px)'}}>
+        <div className="max-w-md mx-auto grid grid-cols-6">
+          {NAV.map(n=>(
+            <button key={n.id} onClick={()=>setScreen(n.id)} className={cx('flex flex-col items-center justify-center gap-1 py-3 text-[10px] font-medium transition-colors',screen===n.id?'text-accent':'text-zinc-500 hover:text-zinc-300')}>
+              {n.icon}<span>{n.label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+    </div>
+  );
+}
+
+function App(){return<Provider><Main/></Provider>;}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
