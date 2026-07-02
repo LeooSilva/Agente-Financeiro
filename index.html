@@ -31,7 +31,7 @@ select option{background:#161A24}
 <body class="text-white antialiased">
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useRef,useContext,createContext,useMemo,useCallback}=React;
+const {useState,useEffect,useRef,useContext,createContext,useMemo}=React;
 
 /* ═══════════════════════════════════════
    UTILS
@@ -51,7 +51,7 @@ const invDueDate=(mk,cd,dd)=>{const[y,m]=mk.split('-').map(Number);return new Da
 const toDateVal=iso=>{const d=new Date(iso);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());};
 const fromDateVal=v=>new Date(v+'T12:00:00').toISOString();
 
-// Balances
+/* ── Balances ── */
 const acctBal=(a,txs)=>{
   let b=a.initialBalance;
   for(const t of txs){
@@ -62,9 +62,12 @@ const acctBal=(a,txs)=>{
   return Math.round(b*100)/100;
 };
 const totalBal=(accts,txs)=>accts.filter(a=>!a.archived).reduce((s,a)=>s+acctBal(a,txs),0);
-const liquidBal=(accts,txs)=>accts.filter(a=>!a.archived&&['banco','dinheiro','vr'].includes(a.type)).reduce((s,a)=>s+acctBal(a,txs),0);
 
-// Cards
+/* FIX #1 — VR separado do saldo disponível */
+const liquidBal=(accts,txs)=>accts.filter(a=>!a.archived&&['banco','dinheiro'].includes(a.type)).reduce((s,a)=>s+acctBal(a,txs),0);
+const vrBal=(accts,txs)=>accts.filter(a=>!a.archived&&a.type==='vr').reduce((s,a)=>s+acctBal(a,txs),0);
+
+/* ── Cards / Invoices ── */
 const cardUsed=(card,txs,payments)=>{
   let u=0;
   for(const t of txs){
@@ -81,7 +84,7 @@ const invStat=(card,mk,payments)=>{
   return new Date()>new Date(y,m-1,card.closingDay,23,59)?'fechada':'aberta';
 };
 
-// Installments builder
+/* ── Installments (valor total dividido em N parcelas) ── */
 const buildInst=(inp,cards)=>{
   const n=Math.max(1,inp.installments||1),gid=n>1?uid():undefined;
   const base=new Date(inp.date),cents=Math.round(inp.amount*100),bc=Math.floor(cents/n),rem=cents-bc*n;
@@ -96,7 +99,7 @@ const buildInst=(inp,cards)=>{
   });
 };
 
-// Monthly
+/* ── Monthly reports ── */
 const mthTxs=(txs,mk)=>txs.filter(t=>t.date.slice(0,7)===mk&&!t.isInvoicePayment);
 const mthInc=(txs,mk)=>mthTxs(txs,mk).filter(t=>t.type==='receita').reduce((s,t)=>s+t.amount,0);
 const mthExp=(txs,mk)=>mthTxs(txs,mk).filter(t=>t.type==='despesa').reduce((s,t)=>s+t.amount,0);
@@ -105,7 +108,7 @@ const expByCat=(txs,mk)=>{
   return Object.entries(m).map(([c,v])=>({c,v})).sort((a,b)=>b.v-a.v);
 };
 
-// Recurring generation
+/* ── Recurring generation ── */
 const genRec=(mk,bills,sals,existing)=>{
   const[y,m]=mk.split('-').map(Number),out=[],at=new Date().toISOString();
   for(const b of bills.filter(b=>b.active)){
@@ -121,7 +124,7 @@ const genRec=(mk,bills,sals,existing)=>{
   return out;
 };
 
-// Quick natural-language parser
+/* ── Quick natural-language parser ── */
 const qParse=(txt,cats,accounts,cards)=>{
   const r={amount:null,category:null,accountId:null,cardId:null,type:'despesa',description:txt.trim()};
   const mm=txt.match(/(\d+(?:[.,]\d{1,2})?)/);if(mm)r.amount=parseFloat(mm[1].replace(',','.'));
@@ -165,7 +168,6 @@ function Provider({children}){
   const note=msg=>{setToast(msg);setTimeout(()=>setToast(''),2200);};
   const up=fn=>setD(p=>({...p,...fn(p)}));
 
-  // Auto-generate current month on login
   useEffect(()=>{
     if(!auth)return;
     const mk=curMk();
@@ -195,13 +197,28 @@ function Provider({children}){
   const delTx=id=>{up(p=>({transactions:p.transactions.filter(t=>t.id!==id)}));note('Excluído.');};
   const delGrp=gid=>{up(p=>({transactions:p.transactions.filter(t=>t.installmentGroupId!==gid)}));note('Parcelamento excluído.');};
 
-  const addBill=r=>{const b={...r,id:uid(),createdAt:new Date().toISOString()};up(p=>{const occ=genRec(curMk(),[b],[],p.transactions);return{recurringBills:[...p.recurringBills,b],transactions:[...p.transactions,...occ]};});note('Conta recorrente criada.');};
+  /* FIX #7 — addBill e addSal não forçam mais accountId padrão; a validação está no form */
+  const addBill=r=>{
+    const b={...r,id:uid(),createdAt:new Date().toISOString()};
+    up(p=>{
+      const occ=b.accountId?genRec(curMk(),[b],[],p.transactions):[];
+      return{recurringBills:[...p.recurringBills,b],transactions:[...p.transactions,...occ]};
+    });
+    note('Conta recorrente criada.');
+  };
   const updBill=(id,r)=>{up(p=>({recurringBills:p.recurringBills.map(x=>x.id===id?{...x,...r}:x)}));note('Atualizado.');};
-  const delBill=id=>{up(p=>({recurringBills:p.recurringBills.filter(x=>x.id!==id)}));note('Excluído.');};
+  const delBill=id=>{up(p=>({recurringBills:p.recurringBills.filter(x=>x.id!==id)}));note('Excluído. Lançamentos já gerados foram mantidos.');};
 
-  const addSal=s=>{const sl={...s,id:uid(),createdAt:new Date().toISOString()};up(p=>{const occ=genRec(curMk(),[],[sl],p.transactions);return{salaries:[...p.salaries,sl],transactions:[...p.transactions,...occ]};});note('Salário cadastrado.');};
+  const addSal=s=>{
+    const sl={...s,id:uid(),createdAt:new Date().toISOString()};
+    up(p=>{
+      const occ=sl.accountId?genRec(curMk(),[],[sl],p.transactions):[];
+      return{salaries:[...p.salaries,sl],transactions:[...p.transactions,...occ]};
+    });
+    note('Salário cadastrado.');
+  };
   const updSal=(id,s)=>{up(p=>({salaries:p.salaries.map(x=>x.id===id?{...x,...s}:x)}));note('Atualizado.');};
-  const delSal=id=>{up(p=>({salaries:p.salaries.filter(x=>x.id!==id)}));note('Excluído.');};
+  const delSal=id=>{up(p=>({salaries:p.salaries.filter(x=>x.id!==id)}));note('Excluído. Lançamentos já gerados foram mantidos.');};
 
   const payInv=(cid,mk,fromId,date)=>{
     up(p=>{
@@ -259,6 +276,8 @@ const IUpload=p=><Ic {...p}><path d="M12 21V9M7 13l5-5 5 5M5 21h14"/></Ic>;
 const IAlert=p=><Ic {...p}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1={12} y1={9} x2={12} y2={13}/><circle cx={12} cy={17} r={.5} fill="currentColor"/></Ic>;
 const IWand=p=><Ic {...p}><path d="M15 4l5 5L8 21H3v-5z"/><path d="M18 1l5 5"/></Ic>;
 const ITicket=p=><Ic {...p}><path d="M2 9a2 2 0 000 4v3a1 1 0 001 1h16a1 1 0 001-1v-3a2 2 0 000-4V6a1 1 0 00-1-1H3a1 1 0 00-1 1z"/><path d="M9 5v14"/></Ic>;
+const IArchive=p=><Ic {...p}><path d="M21 8v13H3V8"/><path d="M23 3H1v5h22z"/><path d="M10 12h4"/></Ic>;
+const IInfo=p=><Ic {...p}><circle cx={12} cy={12} r={9}/><path d="M12 8v4M12 16h.01"/></Ic>;
 
 /* ═══════════════════════════════════════
    UI PRIMITIVES
@@ -267,7 +286,7 @@ const cx=(...a)=>a.filter(Boolean).join(' ');
 
 const Btn=({children,onClick,v='primary',type='button',cls='',disabled})=>{
   const vs={primary:'bg-accent text-night hover:bg-accent-dark',secondary:'bg-panel text-white border border-line hover:border-zinc-500',danger:'text-danger border border-danger/30 bg-danger/10 hover:bg-danger/20',ghost:'text-zinc-400 hover:text-white hover:bg-panel'};
-  return<button type={type} onClick={onClick} disabled={disabled} className={cx('inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-3 text-sm font-semibold transition-all active:scale-95 disabled:opacity-50',vs[v],cls)}>{children}</button>;
+  return<button type={type} onClick={onClick} disabled={disabled} className={cx('inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition-all active:scale-95 disabled:opacity-50',vs[v],cls)}>{children}</button>;
 };
 const IBt=({children,onClick,cls=''})=><button type="button" onClick={onClick} className={cx('w-9 h-9 rounded-full flex items-center justify-center text-zinc-500 hover:text-white hover:bg-panel transition-colors shrink-0',cls)}>{children}</button>;
 
@@ -334,7 +353,7 @@ const Toggle=({value,onChange,label})=>(
 );
 
 function Modal({open,onClose,title,children}){
-  useEffect(()=>{document.body.style.overflow=open?'hidden':'';return()=>{document.body.style.overflow=''};},[open]);
+  useEffect(()=>{document.body.style.overflow=open?'hidden':'';return()=>{document.body.style.overflow='';};},[open]);
   if(!open)return null;
   return(
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
@@ -360,7 +379,10 @@ function AcctRow({account,balance,onClick}){
   return(
     <button onClick={onClick} className="w-full flex items-center gap-3 bg-card border border-line rounded-2xl p-4 text-left active:scale-[0.99] transition-transform">
       <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={{backgroundColor:account.color+'22',color:account.color}}>{acctIcon(account.type)}</div>
-      <div className="flex-1 min-w-0"><p className="text-sm font-semibold text-white truncate">{account.name}</p><p className="text-xs text-zinc-500">{acctLbl(account.type)}</p></div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-white truncate">{account.name}</p>
+        <p className="text-xs text-zinc-500">{acctLbl(account.type)}</p>
+      </div>
       <span className={cx('text-sm font-bold shrink-0',balance<0?'text-danger':'text-white')}>{fmtCur(balance)}</span>
     </button>
   );
@@ -418,6 +440,41 @@ function CatBars({items}){
 }
 
 /* ═══════════════════════════════════════
+   FIX #5 — Modal de ações de conta (editar / arquivar / excluir)
+═══════════════════════════════════════ */
+function AcctActions({account,balance,onClose,onEdit}){
+  const s=useS();
+  const txCount=useMemo(()=>s.transactions.filter(t=>t.accountId===account.id||t.toAccountId===account.id).length,[s.transactions,account.id]);
+  const canDelete=txCount===0;
+  return(
+    <Modal open onClose={onClose} title={account.name}>
+      <div className="space-y-4">
+        <div className="bg-panel rounded-xl p-4">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{backgroundColor:account.color+'22',color:account.color}}>{acctIcon(account.type)}</div>
+            <div><p className="text-xs text-zinc-500">{acctLbl(account.type)}</p><p className="text-xs text-zinc-600 mt-0.5">{txCount} movimentação{txCount!==1?'s':''} vinculada{txCount!==1?'s':''}</p></div>
+          </div>
+          <p className="text-xs text-zinc-500">Saldo atual</p>
+          <p className={cx('text-2xl font-bold mt-0.5',balance<0?'text-danger':'text-white')}>{fmtCur(balance)}</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Btn v="secondary" cls="w-full" onClick={()=>{onEdit();onClose();}}><IEdit s={15}/>Editar conta</Btn>
+          {canDelete
+            ?<Btn v="danger" cls="w-full" onClick={()=>{if(confirm(`Excluir "${account.name}"? Não há movimentações vinculadas. Esta ação não pode ser desfeita.`)){s.delAcct(account.id);onClose();}}}><ITrash s={15}/>Excluir conta</Btn>
+            :<>
+              <div className="bg-warn/10 border border-warn/20 rounded-xl px-4 py-3">
+                <p className="text-xs text-zinc-400 flex items-start gap-2"><IInfo s={14} cls="text-warn shrink-0 mt-0.5"/>Esta conta tem {txCount} movimentações e não pode ser excluída. Você pode arquivá-la — ela sairá da lista mas o histórico será preservado.</p>
+              </div>
+              <Btn v="danger" cls="w-full" onClick={()=>{if(confirm(`Arquivar "${account.name}"? A conta não aparecerá mais na lista mas o histórico será mantido.`)){s.updAcct(account.id,{archived:true});onClose();}}}><IArchive s={15}/>Arquivar conta</Btn>
+            </>
+          }
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ═══════════════════════════════════════
    FORMS
 ═══════════════════════════════════════ */
 function AcctForm({editing,onClose}){
@@ -439,12 +496,16 @@ function AcctForm({editing,onClose}){
   return(
     <Modal open onClose={onClose} title={editing?'Editar conta':'Nova conta'}>
       <form onSubmit={submit} className="space-y-4">
-        <Inp label="Nome da conta" value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Nubank, Dinheiro"/>
+        <Inp label="Nome da conta" value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Nubank, Dinheiro, VR Refeição"/>
         <Sel label="Tipo" value={type} onChange={e=>setType(e.target.value)} options={ACCT_TYPES}/>
+        {type==='vr'&&<div className="bg-warn/10 border border-warn/20 rounded-xl px-3 py-2.5 text-xs text-zinc-400 flex items-start gap-2"><IInfo s={13} cls="text-warn shrink-0 mt-0.5"/>Contas VR não entram no saldo disponível — aparecem em card separado no painel.</div>}
         <Inp label="Saldo inicial (pode ser negativo)" type="number" step="0.01" value={bal} onChange={e=>setBal(e.target.value)}/>
         <div><p className="text-xs font-medium text-zinc-400 mb-2">Cor</p><Swatches value={color} onChange={setColor}/></div>
         {err&&<p className="text-danger text-sm">{err}</p>}
-        <Btn type="submit" cls="w-full">{editing?'Salvar alterações':'Criar conta'}</Btn>
+        <div className="grid grid-cols-2 gap-3">
+          <Btn v="secondary" onClick={onClose} cls="w-full">Cancelar</Btn>
+          <Btn type="submit" cls="w-full">{editing?'Salvar':'Criar conta'}</Btn>
+        </div>
       </form>
     </Modal>
   );
@@ -480,12 +541,16 @@ function CardForm({editing,onClose}){
         </div>
         <div><p className="text-xs font-medium text-zinc-400 mb-2">Cor</p><Swatches value={color} onChange={setColor}/></div>
         {err&&<p className="text-danger text-sm">{err}</p>}
-        <Btn type="submit" cls="w-full">{editing?'Salvar alterações':'Criar cartão'}</Btn>
+        <div className="grid grid-cols-2 gap-3">
+          <Btn v="secondary" onClick={onClose} cls="w-full">Cancelar</Btn>
+          <Btn type="submit" cls="w-full">{editing?'Salvar':'Criar cartão'}</Btn>
+        </div>
       </form>
     </Modal>
   );
 }
 
+/* FIX #2 e #4 — TxForm com botão Cancelar e label "Valor total" */
 function TxForm({editing,onClose}){
   const s=useS();
   const isGrp=!!(editing?.installmentGroupId);
@@ -518,7 +583,10 @@ function TxForm({editing,onClose}){
     const v=parseFloat(String(amt).replace(',','.'));
     if(!v||v<=0){setErr('Valor inválido.');return;}
     if(!desc.trim()){setErr('Informe a descrição.');return;}
-    if(type==='transferencia'&&(!acctId||!toId||acctId===toId)){setErr('Escolha duas contas diferentes.');return;}
+    if(type==='transferencia'){
+      if(!acctId||!toId){setErr('Selecione as contas de origem e destino.');return;}
+      if(acctId===toId){setErr('Origem e destino devem ser contas diferentes.');return;}
+    }
     if(editing){
       s.updTx(editing.id,{description:desc.trim(),category:cat,note,date:fromDateVal(date),amount:isGrp?editing.amount:v});
     }else{
@@ -533,6 +601,7 @@ function TxForm({editing,onClose}){
 
   const iN=Math.max(1,parseInt(inst)||1);
   const amtNum=parseFloat(String(amt).replace(',','.'))||0;
+  const isInstallable=type==='despesa'&&!editing;
 
   return(
     <Modal open onClose={onClose} title={editing?'Editar lançamento':'Novo lançamento'}>
@@ -546,9 +615,18 @@ function TxForm({editing,onClose}){
             </div>
           </div>
         )}
+
         <Seg value={type} onChange={setType} opts={[{v:'despesa',l:'Despesa'},{v:'receita',l:'Receita'},{v:'transferencia',l:'Transfer.'}]}/>
-        <Inp label="Valor (R$)" type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0,00"/>
+
+        {/* FIX #4 — Label contextual para parcelamento */}
+        <Inp
+          label={isInstallable&&iN>1?'Valor total da compra (R$)':'Valor (R$)'}
+          type="number" step="0.01" min="0"
+          value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0,00"
+        />
+
         {type!=='transferencia'&&<Sel label="Categoria" value={cat} onChange={e=>setCat(e.target.value)} options={s.categories.map(c=>({v:c.name,l:c.name}))}/>}
+
         {type==='transferencia'?(
           <div className="grid grid-cols-2 gap-3">
             <Sel label="De" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.length?s.accounts.map(a=>({v:a.id,l:a.name})):[{v:'',l:'(nenhuma)'}]}/>
@@ -562,18 +640,32 @@ function TxForm({editing,onClose}){
               :(s.cards.length?<Sel label="Cartão" value={crdId} onChange={e=>setCrdId(e.target.value)} options={s.cards.map(c=>({v:c.id,l:c.name}))}/>:<p className="text-xs text-warn">Cadastre um cartão primeiro.</p>)}
           </div>
         ):(s.accounts.length?<Sel label="Conta de destino" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:a.name}))}/>:<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>)}
+
         <Inp label="Data" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
         <Inp label="Descrição" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Ex: Supermercado, Combustível..."/>
         <Txtarea label="Observação (opcional)" value={note} onChange={e=>setNote(e.target.value)} placeholder="Detalhes..."/>
-        {type==='despesa'&&!editing&&(
+
+        {/* FIX #4 — Preview de parcelamento destacado */}
+        {isInstallable&&(
           <div>
-            <Inp label="Parcelas (1 = à vista)" type="number" min="1" max="60" value={inst} onChange={e=>setInst(e.target.value)}/>
-            {iN>1&&amtNum>0&&<p className="text-[11px] text-zinc-500 mt-1.5">{iN}x de {fmtCur(amtNum/iN)} · Total {fmtCur(amtNum)}</p>}
+            <Inp label="Número de parcelas (1 = à vista)" type="number" min="1" max="60" value={inst} onChange={e=>setInst(e.target.value)}/>
+            {iN>1&&amtNum>0&&(
+              <div className="mt-2 bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
+                <p className="text-sm font-semibold text-accent">{iN}x de {fmtCur(amtNum/iN)}</p>
+                <p className="text-xs text-zinc-500 mt-0.5">Total: {fmtCur(amtNum)} · 1ª parcela hoje, demais nos meses seguintes</p>
+              </div>
+            )}
           </div>
         )}
+
         {isGrp&&<p className="text-[11px] text-warn bg-warn/10 rounded-lg px-3 py-2">Parcelamento — valor fixo por parcela. Para refazer, exclua todas as parcelas.</p>}
         {err&&<p className="text-danger text-sm">{err}</p>}
-        <Btn type="submit" cls="w-full">{editing?'Salvar alterações':'Adicionar lançamento'}</Btn>
+
+        {/* FIX #2 — Botão Cancelar ao lado do Adicionar */}
+        <div className="grid grid-cols-2 gap-3 pt-1">
+          <Btn v="secondary" onClick={onClose} cls="w-full">Cancelar</Btn>
+          <Btn type="submit" cls="w-full">{editing?'Salvar':'Adicionar'}</Btn>
+        </div>
       </form>
     </Modal>
   );
@@ -621,10 +713,13 @@ function InvPayForm({card,monthKey,onClose}){
         </div>
         {s.accounts.length?(
           <>
-            <Sel label="Débitar de" value={fromId} onChange={e=>setFromId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:`${a.name} (saldo: ${fmtCur(acctBal(a,s.transactions))})`}))}/>
-            {fromBal<total&&<p className="text-xs text-warn bg-warn/10 rounded-lg px-3 py-2">⚠ Saldo insuficiente — a conta ficará negativa.</p>}
+            <Sel label="Débitar de" value={fromId} onChange={e=>setFromId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:`${a.name} (${fmtCur(acctBal(a,s.transactions))})`}))}/>
+            {fromBal<total&&<p className="text-xs text-warn bg-warn/10 rounded-lg px-3 py-2">⚠ Saldo insuficiente — a conta ficará negativa após o pagamento.</p>}
             <Inp label="Data do pagamento" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
-            <Btn cls="w-full" onClick={()=>{s.payInv(card.id,monthKey,fromId,fromDateVal(date));onClose();}}><IChk s={15}/>Confirmar pagamento de {fmtCur(total)}</Btn>
+            <div className="grid grid-cols-2 gap-3">
+              <Btn v="secondary" onClick={onClose} cls="w-full">Cancelar</Btn>
+              <Btn cls="w-full" onClick={()=>{s.payInv(card.id,monthKey,fromId,fromDateVal(date));onClose();}}><IChk s={15}/>Pagar {fmtCur(total)}</Btn>
+            </div>
           </>
         ):<p className="text-xs text-warn text-center py-4">Cadastre uma conta para realizar pagamentos.</p>}
       </div>
@@ -632,13 +727,14 @@ function InvPayForm({card,monthKey,onClose}){
   );
 }
 
+/* FIX #6 e #7 — BillForm sem default de conta + preview do lançamento */
 function BillForm({editing,onClose}){
   const s=useS();
   const[name,setName]=useState(editing?.name||'');
   const[amt,setAmt]=useState(editing?String(editing.amount):'');
   const[cat,setCat]=useState(editing?.category||'Moradia');
   const[day,setDay]=useState(editing?String(editing.dueDay):'10');
-  const[acctId,setAcctId]=useState(editing?.accountId||s.accounts[0]?.id||'');
+  const[acctId,setAcctId]=useState(editing?.accountId||'');
   const[active,setActive]=useState(editing?.active!==false);
   const[err,setErr]=useState('');
   const submit=ev=>{
@@ -646,10 +742,13 @@ function BillForm({editing,onClose}){
     const v=parseFloat(String(amt).replace(',','.'));
     if(!name.trim()){setErr('Informe o nome.');return;}
     if(!v||v<=0){setErr('Valor inválido.');return;}
+    if(!acctId){setErr('Selecione a conta de pagamento.');return;}
     const b={name:name.trim(),amount:v,category:cat,dueDay:Math.max(1,Math.min(31,parseInt(day)||10)),accountId:acctId,active};
     if(editing)s.updBill(editing.id,b);else s.addBill(b);
     onClose();
   };
+  const selAcct=s.accounts.find(a=>a.id===acctId);
+  const amtNum=parseFloat(String(amt).replace(',','.'))||0;
   return(
     <Modal open onClose={onClose} title={editing?'Editar conta recorrente':'Nova conta recorrente'}>
       <form onSubmit={submit} className="space-y-4">
@@ -657,41 +756,67 @@ function BillForm({editing,onClose}){
         <Inp label="Valor (R$)" type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)}/>
         <Sel label="Categoria" value={cat} onChange={e=>setCat(e.target.value)} options={s.categories.map(c=>({v:c.name,l:c.name}))}/>
         <Inp label="Dia de vencimento (todo mês)" type="number" min="1" max="31" value={day} onChange={e=>setDay(e.target.value)}/>
-        {s.accounts.length?<Sel label="Conta" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:a.name}))}/>:<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>}
-        <Toggle value={active} onChange={setActive} label="Conta ativa"/>
+        {s.accounts.length?(
+          <Sel label="Conta de pagamento" value={acctId} onChange={e=>setAcctId(e.target.value)}
+            options={[{v:'',l:'— Selecione uma conta —'},...s.accounts.map(a=>({v:a.id,l:a.name}))]}/>
+        ):<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>}
+        {!editing&&selAcct&&amtNum>0&&(
+          <div className="bg-panel rounded-xl px-4 py-3 text-xs text-zinc-400">
+            Será gerado um lançamento de <span className="text-white font-semibold">{fmtCur(amtNum)}</span> na conta <span className="text-white font-semibold">{selAcct.name}</span> para o mês atual.
+          </div>
+        )}
+        <Toggle value={active} onChange={setActive} label="Conta ativa (gera lançamento todo mês)"/>
         {err&&<p className="text-danger text-sm">{err}</p>}
-        <Btn type="submit" cls="w-full">{editing?'Salvar':'Criar conta recorrente'}</Btn>
+        <div className="grid grid-cols-2 gap-3">
+          <Btn v="secondary" onClick={onClose} cls="w-full">Cancelar</Btn>
+          <Btn type="submit" cls="w-full">{editing?'Salvar':'Criar'}</Btn>
+        </div>
       </form>
     </Modal>
   );
 }
 
+/* FIX #6 e #7 — SalaryForm sem default de conta + preview do lançamento */
 function SalaryForm({editing,onClose}){
   const s=useS();
   const[desc,setDesc]=useState(editing?.description||'Salário');
   const[amt,setAmt]=useState(editing?String(editing.amount):'');
   const[day,setDay]=useState(editing?String(editing.payDay):'5');
-  const[acctId,setAcctId]=useState(editing?.accountId||s.accounts[0]?.id||'');
+  const[acctId,setAcctId]=useState(editing?.accountId||'');
   const[active,setActive]=useState(editing?.active!==false);
   const[err,setErr]=useState('');
   const submit=ev=>{
     ev.preventDefault();setErr('');
     const v=parseFloat(String(amt).replace(',','.'));
     if(!v||v<=0){setErr('Valor inválido.');return;}
+    if(!acctId){setErr('Selecione a conta de destino.');return;}
     const sl={description:desc.trim()||'Salário',amount:v,payDay:Math.max(1,Math.min(31,parseInt(day)||5)),accountId:acctId,active};
     if(editing)s.updSal(editing.id,sl);else s.addSal(sl);
     onClose();
   };
+  const selAcct=s.accounts.find(a=>a.id===acctId);
+  const amtNum=parseFloat(String(amt).replace(',','.'))||0;
   return(
     <Modal open onClose={onClose} title={editing?'Editar salário':'Cadastrar salário'}>
       <form onSubmit={submit} className="space-y-4">
         <Inp label="Descrição" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Ex: Salário CLT"/>
         <Inp label="Valor líquido (R$)" type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)}/>
         <Inp label="Dia previsto de recebimento" type="number" min="1" max="31" value={day} onChange={e=>setDay(e.target.value)}/>
-        {s.accounts.length?<Sel label="Conta de destino" value={acctId} onChange={e=>setAcctId(e.target.value)} options={s.accounts.map(a=>({v:a.id,l:a.name}))}/>:<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>}
-        <Toggle value={active} onChange={setActive} label="Ativo (gera receita todo mês)"/>
+        {s.accounts.length?(
+          <Sel label="Conta de destino do crédito" value={acctId} onChange={e=>setAcctId(e.target.value)}
+            options={[{v:'',l:'— Selecione uma conta —'},...s.accounts.map(a=>({v:a.id,l:a.name}))]}/>
+        ):<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>}
+        {!editing&&selAcct&&amtNum>0&&(
+          <div className="bg-accent/10 border border-accent/20 rounded-xl px-4 py-3 text-xs text-zinc-400">
+            Será gerado um recebimento de <span className="text-accent font-semibold">{fmtCur(amtNum)}</span> na conta <span className="text-white font-semibold">{selAcct.name}</span> para o mês atual.
+          </div>
+        )}
+        <Toggle value={active} onChange={setActive} label="Ativo (gera receita automaticamente todo mês)"/>
         {err&&<p className="text-danger text-sm">{err}</p>}
-        <Btn type="submit" cls="w-full">{editing?'Salvar':'Cadastrar salário'}</Btn>
+        <div className="grid grid-cols-2 gap-3">
+          <Btn v="secondary" onClick={onClose} cls="w-full">Cancelar</Btn>
+          <Btn type="submit" cls="w-full">{editing?'Salvar':'Cadastrar'}</Btn>
+        </div>
       </form>
     </Modal>
   );
@@ -743,13 +868,15 @@ function LoginScreen(){
 }
 
 /* ═══════════════════════════════════════
-   SCREEN: DASHBOARD
+   SCREEN: DASHBOARD — FIX #1 (VR separado)
 ═══════════════════════════════════════ */
 function DashboardScreen({nav}){
   const s=useS();
   const mk=curMk();
   const liq=useMemo(()=>liquidBal(s.accounts,s.transactions),[s.accounts,s.transactions]);
   const tot=useMemo(()=>totalBal(s.accounts,s.transactions),[s.accounts,s.transactions]);
+  const vr=useMemo(()=>vrBal(s.accounts,s.transactions),[s.accounts,s.transactions]);
+  const hasVR=useMemo(()=>s.accounts.some(a=>!a.archived&&a.type==='vr'),[s.accounts]);
   const inc=useMemo(()=>mthInc(s.transactions,mk),[s.transactions,mk]);
   const exp=useMemo(()=>mthExp(s.transactions,mk),[s.transactions,mk]);
   const cats=useMemo(()=>expByCat(s.transactions,mk),[s.transactions,mk]);
@@ -773,22 +900,38 @@ function DashboardScreen({nav}){
         <div><p className="text-zinc-500 text-xs">Olá,</p><h1 className="text-xl font-bold text-white">{s.settings?.username||'Usuário'} 👋</h1></div>
         <div className="w-10 h-10 rounded-full bg-accent/15 flex items-center justify-center"><IHome s={18} cls="text-accent"/></div>
       </header>
+
       {isEmpty?(
         <Empty icon={<IWallet s={40}/>} title="Comece cadastrando uma conta" sub="Adicione suas contas e cartões para controlar seu dinheiro em tempo real."
           action={<Btn onClick={()=>nav('contas')} v="ghost" cls="text-accent">Ir para Contas →</Btn>}/>
       ):(
         <>
+          {/* Saldo disponível — apenas banco + dinheiro */}
           <div className="bg-card rounded-2xl border border-line p-5 mb-4">
-            <p className="text-xs text-zinc-500 mb-1">Saldo disponível</p>
+            <p className="text-xs text-zinc-500 mb-1">Saldo disponível (banco + dinheiro)</p>
             <p className="text-3xl font-bold text-white tracking-tight">{fmtCur(liq)}</p>
             <p className="text-xs text-zinc-500 mt-2">Patrimônio total: <span className="text-white font-medium">{fmtCur(tot)}</span></p>
           </div>
+
+          {/* FIX #1 — Card VR separado */}
+          {hasVR&&(
+            <div className="bg-card rounded-2xl border border-warn/25 p-4 mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-zinc-500 mb-1">VR / Benefícios</p>
+                <p className={cx('text-xl font-bold',vr<0?'text-danger':'text-warn')}>{fmtCur(vr)}</p>
+                <p className="text-[10px] text-zinc-600 mt-0.5">Não entra no saldo disponível</p>
+              </div>
+              <ITicket s={28} cls="text-warn opacity-40"/>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3 mb-4">
             <StatCard label="Receitas do mês" value={fmtCur(inc)} tone="pos" icon={<IDown s={14} cls="text-accent"/>}/>
             <StatCard label="Gastos do mês" value={fmtCur(exp)} tone="neg" icon={<IUp s={14} cls="text-danger"/>}/>
             <StatCard label="Em cartões" value={fmtCur(cardsUsed)} sub={`Limite: ${fmtCur(cardsLimit)}`} icon={<ICrd s={14}/>}/>
             <StatCard label="Parcelas futuras" value={fmtCur(futInst)} icon={<IClock s={14}/>}/>
           </div>
+
           {cats.length>0&&(
             <div className="bg-card rounded-2xl border border-line p-4 mb-4">
               <p className="text-sm font-semibold text-white mb-3">Gastos por categoria</p>
@@ -839,7 +982,7 @@ function DashboardScreen({nav}){
 }
 
 /* ═══════════════════════════════════════
-   SCREEN: MOVIMENTAÇÕES
+   SCREEN: MOVIMENTAÇÕES — FIX #3 (botão maior)
 ═══════════════════════════════════════ */
 function MovScreen(){
   const s=useS();
@@ -852,7 +995,8 @@ function MovScreen(){
     <div className="px-4 pt-5 max-w-md mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-white">Movimentações</h1>
-        <Btn onClick={()=>{setEditTx(null);setShowForm(true);}} cls="px-3 py-2 text-xs"><IPlus s={15}/>Novo</Btn>
+        {/* FIX #3 — Botão maior para mobile */}
+        <Btn onClick={()=>{setEditTx(null);setShowForm(true);}} cls="px-5 py-3 text-sm"><IPlus s={16}/>Novo</Btn>
       </div>
       <div className="mb-4"><Seg value={filter} onChange={setFilter} opts={[{v:'todos',l:'Todos'},{v:'receita',l:'Receitas'},{v:'despesa',l:'Despesas'},{v:'transferencia',l:'Transfer.'}]}/></div>
       <div className="bg-card rounded-2xl border border-line p-4">
@@ -869,13 +1013,15 @@ function MovScreen(){
 }
 
 /* ═══════════════════════════════════════
-   SCREEN: CONTAS
+   SCREEN: CONTAS — FIX #3, #5, #6
 ═══════════════════════════════════════ */
 function ContasScreen(){
   const s=useS();
   const[tab,setTab]=useState('contas');
   const[showAcct,setShowAcct]=useState(false);
   const[editAcct,setEditAcct]=useState(null);
+  /* FIX #5 — Estado para modal de ações da conta */
+  const[actAcct,setActAcct]=useState(null);
   const[showBill,setShowBill]=useState(false);
   const[editBill,setEditBill]=useState(null);
   const[showSal,setShowSal]=useState(false);
@@ -887,61 +1033,102 @@ function ContasScreen(){
     else{setEditSal(null);setShowSal(true);}
   };
 
+  const activeAccounts=useMemo(()=>s.accounts.filter(a=>!a.archived),[s.accounts]);
+
   return(
     <div className="px-4 pt-5 max-w-md mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-white">Contas</h1>
-        <Btn onClick={openNew} cls="px-3 py-2 text-xs"><IPlus s={15}/>Novo</Btn>
+        {/* FIX #3 */}
+        <Btn onClick={openNew} cls="px-5 py-3 text-sm"><IPlus s={16}/>Novo</Btn>
       </div>
       <div className="mb-4"><Seg value={tab} onChange={setTab} opts={[{v:'contas',l:'Contas'},{v:'recorrentes',l:'Recorrentes'},{v:'salarios',l:'Salário'}]}/></div>
 
       {tab==='contas'&&(
         <div className="space-y-3">
-          {!s.accounts.filter(a=>!a.archived).length?<Empty icon={<IBank s={32}/>} title="Nenhuma conta" sub="Adicione bancos, dinheiro físico, VR e benefícios."/>
-            :s.accounts.filter(a=>!a.archived).map(a=><AcctRow key={a.id} account={a} balance={acctBal(a,s.transactions)} onClick={()=>{setEditAcct(a);setShowAcct(true);}}/>)}
-          {s.accounts.filter(a=>!a.archived).length>1&&(
-            <div className="bg-card rounded-2xl border border-line p-4 flex justify-between items-center">
-              <span className="text-xs text-zinc-500">Total líquido disponível</span>
-              <span className={cx('text-base font-bold',liquidBal(s.accounts,s.transactions)<0?'text-danger':'text-accent')}>{fmtCur(liquidBal(s.accounts,s.transactions))}</span>
+          {!activeAccounts.length
+            ?<Empty icon={<IBank s={32}/>} title="Nenhuma conta" sub="Adicione bancos, dinheiro físico, VR e benefícios."/>
+            :activeAccounts.map(a=>(
+              /* FIX #5 — Click abre modal de ações, não direto o form */
+              <AcctRow key={a.id} account={a} balance={acctBal(a,s.transactions)} onClick={()=>setActAcct(a)}/>
+            ))
+          }
+          {activeAccounts.length>0&&(
+            <div className="space-y-2">
+              {activeAccounts.some(a=>['banco','dinheiro'].includes(a.type))&&(
+                <div className="bg-card rounded-2xl border border-line p-4 flex justify-between items-center">
+                  <span className="text-xs text-zinc-500">Saldo disponível (banco + dinheiro)</span>
+                  <span className={cx('text-base font-bold',liquidBal(s.accounts,s.transactions)<0?'text-danger':'text-accent')}>{fmtCur(liquidBal(s.accounts,s.transactions))}</span>
+                </div>
+              )}
+              {activeAccounts.some(a=>a.type==='vr')&&(
+                <div className="bg-card rounded-2xl border border-warn/20 p-4 flex justify-between items-center">
+                  <span className="text-xs text-zinc-500">Total VR / Benefícios</span>
+                  <span className={cx('text-base font-bold',vrBal(s.accounts,s.transactions)<0?'text-danger':'text-warn')}>{fmtCur(vrBal(s.accounts,s.transactions))}</span>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
+      {/* FIX #6 — Recorrentes com edição/exclusão clara */}
       {tab==='recorrentes'&&(
         <div className="space-y-3">
-          {!s.recurringBills.length?<Empty icon={<IRep s={32}/>} title="Nenhuma conta recorrente" sub="Cadastre Netflix, aluguel, internet, academia etc."/>
+          {!s.recurringBills.length
+            ?<Empty icon={<IRep s={32}/>} title="Nenhuma conta recorrente" sub="Cadastre Netflix, aluguel, internet, academia etc."/>
             :s.recurringBills.map(b=>(
-            <div key={b.id} className="bg-card border border-line rounded-2xl p-4 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2"><p className="text-sm font-semibold text-white truncate">{b.name}</p>{!b.active&&<span className="text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5">Pausada</span>}</div>
-                <p className="text-xs text-zinc-500">{b.category} · Todo dia {b.dueDay}</p>
+              <div key={b.id} className="bg-card border border-line rounded-2xl p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm font-semibold text-white truncate">{b.name}</p>
+                      {!b.active&&<span className="text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5 shrink-0">Pausada</span>}
+                    </div>
+                    <p className="text-xs text-zinc-500">{b.category} · Todo dia {b.dueDay}</p>
+                  </div>
+                  <span className="text-sm font-bold text-white shrink-0">{fmtCur(b.amount)}</span>
+                  <IBt onClick={()=>{setEditBill(b);setShowBill(true);}}><IEdit s={15}/></IBt>
+                  <IBt onClick={()=>{if(confirm(`Excluir "${b.name}"?\nLançamentos já gerados serão mantidos no histórico.`))s.delBill(b.id);}}><ITrash s={15} cls="text-danger"/></IBt>
+                </div>
               </div>
-              <span className="text-sm font-bold text-white shrink-0">{fmtCur(b.amount)}</span>
-              <IBt onClick={()=>{setEditBill(b);setShowBill(true);}}><IEdit s={15}/></IBt>
-              <IBt onClick={()=>{if(confirm('Excluir esta conta recorrente?'))s.delBill(b.id);}}><ITrash s={15} cls="text-danger"/></IBt>
-            </div>
-          ))}
+            ))
+          }
         </div>
       )}
 
+      {/* FIX #6 — Salários com edição/exclusão clara */}
       {tab==='salarios'&&(
         <div className="space-y-3">
-          {!s.salaries.length?<Empty icon={<IWallet s={32}/>} title="Nenhum salário cadastrado" sub="Cadastre seu salário para gerar receita automática todo mês."/>
+          {!s.salaries.length
+            ?<Empty icon={<IWallet s={32}/>} title="Nenhum salário cadastrado" sub="Cadastre seu salário para gerar receita automática todo mês."/>
             :s.salaries.map(sl=>(
-            <div key={sl.id} className="bg-card border border-line rounded-2xl p-4 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2"><p className="text-sm font-semibold text-white truncate">{sl.description}</p>{!sl.active&&<span className="text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5">Pausado</span>}</div>
-                <p className="text-xs text-zinc-500">Todo dia {sl.payDay}</p>
+              <div key={sl.id} className="bg-card border border-line rounded-2xl p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm font-semibold text-white truncate">{sl.description}</p>
+                      {!sl.active&&<span className="text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5 shrink-0">Pausado</span>}
+                    </div>
+                    <p className="text-xs text-zinc-500">Todo dia {sl.payDay} · {s.accounts.find(a=>a.id===sl.accountId)?.name||'—'}</p>
+                  </div>
+                  <span className="text-sm font-bold text-accent shrink-0">{fmtCur(sl.amount)}</span>
+                  <IBt onClick={()=>{setEditSal(sl);setShowSal(true);}}><IEdit s={15}/></IBt>
+                  <IBt onClick={()=>{if(confirm(`Excluir "${sl.description}"?\nLançamentos já gerados serão mantidos no histórico.`))s.delSal(sl.id);}}><ITrash s={15} cls="text-danger"/></IBt>
+                </div>
               </div>
-              <span className="text-sm font-bold text-accent shrink-0">{fmtCur(sl.amount)}</span>
-              <IBt onClick={()=>{setEditSal(sl);setShowSal(true);}}><IEdit s={15}/></IBt>
-              <IBt onClick={()=>{if(confirm('Excluir este salário?'))s.delSal(sl.id);}}><ITrash s={15} cls="text-danger"/></IBt>
-            </div>
-          ))}
+            ))
+          }
         </div>
       )}
 
+      {/* FIX #5 — Modal de ações da conta */}
+      {actAcct&&<AcctActions
+        account={actAcct}
+        balance={acctBal(actAcct,s.transactions)}
+        onClose={()=>setActAcct(null)}
+        onEdit={()=>{setEditAcct(actAcct);setShowAcct(true);}}
+      />}
       {showAcct&&<AcctForm editing={editAcct} onClose={()=>{setShowAcct(false);setEditAcct(null);}}/>}
       {showBill&&<BillForm editing={editBill} onClose={()=>{setShowBill(false);setEditBill(null);}}/>}
       {showSal&&<SalaryForm editing={editSal} onClose={()=>{setShowSal(false);setEditSal(null);}}/>}
@@ -950,7 +1137,7 @@ function ContasScreen(){
 }
 
 /* ═══════════════════════════════════════
-   SCREEN: CARTÕES
+   SCREEN: CARTÕES — FIX #3
 ═══════════════════════════════════════ */
 function CartoesScreen(){
   const s=useS();
@@ -958,12 +1145,12 @@ function CartoesScreen(){
   const[editCard,setEditCard]=useState(null);
   const[selCard,setSelCard]=useState(null);
   const[payData,setPayData]=useState(null);
-
   return(
     <div className="px-4 pt-5 max-w-md mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-white">Cartões</h1>
-        <Btn onClick={()=>{setEditCard(null);setShowForm(true);}} cls="px-3 py-2 text-xs"><IPlus s={15}/>Novo</Btn>
+        {/* FIX #3 */}
+        <Btn onClick={()=>{setEditCard(null);setShowForm(true);}} cls="px-5 py-3 text-sm"><IPlus s={16}/>Novo</Btn>
       </div>
       {!s.cards.length?<Empty icon={<ICrd s={40}/>} title="Nenhum cartão de crédito" sub="Adicione seus cartões para controlar faturas e limites."/>:(
         <div className="space-y-3">
@@ -992,7 +1179,7 @@ function CartoesScreen(){
                         <div className="space-y-2 max-h-48 overflow-y-auto">
                           {s.transactions.filter(t=>t.invoiceId===card.id+'_'+cmk&&!t.isInvoicePayment).sort((a,b)=>b.date.localeCompare(a.date)).map(tx=>(
                             <div key={tx.id} className="flex justify-between text-xs">
-                              <span className="text-zinc-400 truncate pr-2">{tx.description} <span className="text-zinc-600">{tx.installmentTotal?`(${tx.installmentIndex}/${tx.installmentTotal})`:''}· {fmtDate(tx.date)}</span></span>
+                              <span className="text-zinc-400 truncate pr-2">{tx.description} {tx.installmentTotal?`(${tx.installmentIndex}/${tx.installmentTotal})`:''} · <span className="text-zinc-600">{fmtDate(tx.date)}</span></span>
                               <span className="text-white shrink-0">{fmtCur(tx.amount)}</span>
                             </div>
                           ))}
@@ -1036,8 +1223,7 @@ function RelScreen(){
 
   const evolution=useMemo(()=>Array.from({length:6},(_,i)=>{
     const k=addMths(mk,i-5);
-    const label=k.split('-').reverse().join('/').slice(0,5);
-    return{label,receitas:mthInc(s.transactions,k),despesas:mthExp(s.transactions,k)};
+    return{label:k.split('-').reverse().join('/').slice(0,5),receitas:mthInc(s.transactions,k),despesas:mthExp(s.transactions,k)};
   }),[s.transactions]);
 
   const maxEvo=Math.max(1,...evolution.map(e=>Math.max(e.receitas,e.despesas)));
@@ -1046,28 +1232,24 @@ function RelScreen(){
     <div className="px-4 pt-5 max-w-md mx-auto">
       <h1 className="text-xl font-bold text-white mb-4">Relatórios</h1>
       <div className="mb-4"><Seg value={period} onChange={v=>{setPeriod(v);if(v==='mes')setViewMk(curMk());}} opts={[{v:'hoje',l:'Hoje'},{v:'semana',l:'Semana'},{v:'mes',l:'Mês'},{v:'ano',l:'Ano'}]}/></div>
-
       {period==='mes'&&(
         <div className="flex items-center justify-between mb-4">
-          <button onClick={()=>setViewMk(p=>addMths(p,-1))} className="text-accent text-sm font-medium px-2">‹ Anterior</button>
+          <button onClick={()=>setViewMk(p=>addMths(p,-1))} className="text-accent text-sm font-medium px-2 py-1">‹ Anterior</button>
           <span className="text-white text-sm font-semibold capitalize">{new Date(viewMk+'-15').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}</span>
-          <button onClick={()=>setViewMk(p=>addMths(p,1))} className="text-accent text-sm font-medium px-2">Próximo ›</button>
+          <button onClick={()=>setViewMk(p=>addMths(p,1))} className="text-accent text-sm font-medium px-2 py-1">Próximo ›</button>
         </div>
       )}
-
       <div className="grid grid-cols-3 gap-3 mb-4">
         <StatCard label="Receitas" value={fmtCur(inc)} tone="pos"/>
         <StatCard label="Despesas" value={fmtCur(exp)} tone="neg"/>
         <StatCard label="Saldo" value={fmtCur(inc-exp)} tone={inc-exp>=0?'pos':'neg'}/>
       </div>
-
       {cats.length>0&&(
         <div className="bg-card rounded-2xl border border-line p-4 mb-4">
           <p className="text-sm font-semibold text-white mb-3">Despesas por categoria</p>
           <CatBars items={cats}/>
         </div>
       )}
-
       <div className="bg-card rounded-2xl border border-line p-4 mb-4">
         <p className="text-sm font-semibold text-white mb-4">Evolução mensal (6 meses)</p>
         <div className="flex items-end justify-between gap-2 h-28">
@@ -1086,8 +1268,7 @@ function RelScreen(){
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-danger/60 inline-block"/>Despesas</span>
         </div>
       </div>
-
-      {txsInPeriod.length>0&&(
+      {txsInPeriod.length>0?(
         <div className="bg-card rounded-2xl border border-line p-4">
           <p className="text-sm font-semibold text-white mb-3">Lançamentos do período ({txsInPeriod.length})</p>
           <div className="divide-line max-h-72 overflow-y-auto">
@@ -1097,8 +1278,7 @@ function RelScreen(){
             })}
           </div>
         </div>
-      )}
-      {txsInPeriod.length===0&&<Empty icon={<IChart s={32}/>} title="Sem dados neste período"/>}
+      ):<Empty icon={<IChart s={32}/>} title="Sem dados neste período"/>}
     </div>
   );
 }
@@ -1195,7 +1375,7 @@ function ConfigScreen(){
             <Btn v="danger" cls="w-full" onClick={()=>{if(confirm('Apagar TODOS os dados financeiros? Esta ação não pode ser desfeita.'))s.clrData();}}><ITrash s={16}/>Apagar todos os dados</Btn>
           </div>
           <div className="bg-card rounded-2xl border border-line p-4 text-center">
-            <p className="text-xs text-zinc-600">Meu Financeiro v1.0 · Dados locais · {new Date().getFullYear()}</p>
+            <p className="text-xs text-zinc-600">Meu Financeiro v1.1 · Dados locais · {new Date().getFullYear()}</p>
           </div>
         </div>
       )}
