@@ -49,7 +49,6 @@ const addMoCl=(date,n)=>{const tot=date.getFullYear()*12+date.getMonth()+n;const
 const toDateVal=iso=>{const d=new Date(iso);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());};
 const fromDateVal=v=>new Date(v+'T12:00:00').toISOString();
 
-<<<<<<< HEAD
 /* FIX 1 — compra no dia do fechamento ou depois → próxima fatura */
 const invMkOf=(date,cd)=>date.getDate()<cd?mkOf(date):addMths(mkOf(date),1);
 
@@ -57,9 +56,6 @@ const invMkOf=(date,cd)=>date.getDate()<cd?mkOf(date):addMths(mkOf(date),1);
 const invDueDate=(mk,_cd,dd)=>{const[y,m]=mk.split('-').map(Number);return new Date(y,m,dd);};
 
 /* Balances */
-=======
-/* ── Balances ── */
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 const acctBal=(a,txs)=>{
   let b=a.initialBalance;
   for(const t of txs){
@@ -70,19 +66,10 @@ const acctBal=(a,txs)=>{
   return Math.round(b*100)/100;
 };
 const totalBal=(accts,txs)=>accts.filter(a=>!a.archived).reduce((s,a)=>s+acctBal(a,txs),0);
-<<<<<<< HEAD
 const liquidBal=(accts,txs)=>accts.filter(a=>!a.archived&&['banco','dinheiro'].includes(a.type)).reduce((s,a)=>s+acctBal(a,txs),0);
 const vrBal=(accts,txs)=>accts.filter(a=>!a.archived&&a.type==='vr').reduce((s,a)=>s+acctBal(a,txs),0);
 
 /* Cards */
-=======
-
-/* FIX #1 — VR separado do saldo disponível */
-const liquidBal=(accts,txs)=>accts.filter(a=>!a.archived&&['banco','dinheiro'].includes(a.type)).reduce((s,a)=>s+acctBal(a,txs),0);
-const vrBal=(accts,txs)=>accts.filter(a=>!a.archived&&a.type==='vr').reduce((s,a)=>s+acctBal(a,txs),0);
-
-/* ── Cards / Invoices ── */
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 const cardUsed=(card,txs,payments)=>{
   let u=0;
   for(const t of txs){
@@ -99,11 +86,7 @@ const invStat=(card,mk,payments)=>{
   return new Date()>new Date(y,m-1,card.closingDay,23,59)?'fechada':'aberta';
 };
 
-<<<<<<< HEAD
 /* Installments */
-=======
-/* ── Installments (valor total dividido em N parcelas) ── */
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 const buildInst=(inp,cards)=>{
   const n=Math.max(1,inp.installments||1),gid=n>1?uid():undefined;
   const base=new Date(inp.date),cents=Math.round(inp.amount*100),bc=Math.floor(cents/n),rem=cents-bc*n;
@@ -118,11 +101,7 @@ const buildInst=(inp,cards)=>{
   });
 };
 
-<<<<<<< HEAD
 /* Monthly */
-=======
-/* ── Monthly reports ── */
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 const mthTxs=(txs,mk)=>txs.filter(t=>t.date.slice(0,7)===mk&&!t.isInvoicePayment);
 const mthInc=(txs,mk)=>mthTxs(txs,mk).filter(t=>t.type==='receita').reduce((s,t)=>s+t.amount,0);
 const mthExp=(txs,mk)=>mthTxs(txs,mk).filter(t=>t.type==='despesa').reduce((s,t)=>s+t.amount,0);
@@ -131,11 +110,7 @@ const expByCat=(txs,mk)=>{
   return Object.entries(m).map(([c,v])=>({c,v})).sort((a,b)=>b.v-a.v);
 };
 
-<<<<<<< HEAD
 /* Recurring */
-=======
-/* ── Recurring generation ── */
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 const genRec=(mk,bills,sals,existing)=>{
   const[y,m]=mk.split('-').map(Number),out=[],at=new Date().toISOString();
   for(const b of bills.filter(b=>b.active)){
@@ -151,10 +126,6 @@ const genRec=(mk,bills,sals,existing)=>{
   return out;
 };
 
-<<<<<<< HEAD
-=======
-/* ── Quick natural-language parser ── */
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 const qParse=(txt,cats,accounts,cards)=>{
   const r={amount:null,category:null,accountId:null,cardId:null,type:'despesa',description:txt.trim()};
   const mm=txt.match(/(\d+(?:[.,]\d{1,2})?)/);if(mm)r.amount=parseFloat(mm[1].replace(',','.'));
@@ -227,19 +198,9 @@ function Provider({children}){
   const delTx=id=>{up(p=>({transactions:p.transactions.filter(t=>t.id!==id)}));note('Excluído.');};
   const delGrp=gid=>{up(p=>({transactions:p.transactions.filter(t=>t.installmentGroupId!==gid)}));note('Parcelamento excluído.');};
 
-<<<<<<< HEAD
   const addBill=r=>{
     const b={...r,id:uid(),createdAt:new Date().toISOString()};
     up(p=>{const occ=b.accountId?genRec(curMk(),[b],[],p.transactions):[];return{recurringBills:[...p.recurringBills,b],transactions:[...p.transactions,...occ]};});
-=======
-  /* FIX #7 — addBill e addSal não forçam mais accountId padrão; a validação está no form */
-  const addBill=r=>{
-    const b={...r,id:uid(),createdAt:new Date().toISOString()};
-    up(p=>{
-      const occ=b.accountId?genRec(curMk(),[b],[],p.transactions):[];
-      return{recurringBills:[...p.recurringBills,b],transactions:[...p.transactions,...occ]};
-    });
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
     note('Conta recorrente criada.');
   };
   const updBill=(id,r)=>{up(p=>({recurringBills:p.recurringBills.map(x=>x.id===id?{...x,...r}:x)}));note('Atualizado.');};
@@ -247,14 +208,7 @@ function Provider({children}){
 
   const addSal=s=>{
     const sl={...s,id:uid(),createdAt:new Date().toISOString()};
-<<<<<<< HEAD
     up(p=>{const occ=sl.accountId?genRec(curMk(),[],[sl],p.transactions):[];return{salaries:[...p.salaries,sl],transactions:[...p.transactions,...occ]};});
-=======
-    up(p=>{
-      const occ=sl.accountId?genRec(curMk(),[],[sl],p.transactions):[];
-      return{salaries:[...p.salaries,sl],transactions:[...p.transactions,...occ]};
-    });
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
     note('Salário cadastrado.');
   };
   const updSal=(id,s)=>{up(p=>({salaries:p.salaries.map(x=>x.id===id?{...x,...s}:x)}));note('Atualizado.');};
@@ -484,37 +438,6 @@ function CatBars({items}){
 }
 
 /* AcctActions modal */
-function AcctActions({account,balance,onClose,onEdit}){
-  const s=useS();
-  const txCount=useMemo(()=>s.transactions.filter(t=>t.accountId===account.id||t.toAccountId===account.id).length,[s.transactions,account.id]);
-  const canDelete=txCount===0;
-  return(
-    <Modal open onClose={onClose} title={account.name}>
-      <div className="space-y-4">
-        <div className="bg-panel rounded-xl p-4">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{backgroundColor:account.color+'22',color:account.color}}>{acctIcon(account.type)}</div>
-            <div><p className="text-xs text-zinc-500">{acctLbl(account.type)}</p><p className="text-xs text-zinc-600 mt-0.5">{txCount} movimentação{txCount!==1?'s':''} vinculada{txCount!==1?'s':''}</p></div>
-          </div>
-          <p className="text-xs text-zinc-500">Saldo atual</p>
-          <p className={cx('text-2xl font-bold mt-0.5',balance<0?'text-danger':'text-white')}>{fmtCur(balance)}</p>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Btn v="secondary" cls="w-full" onClick={()=>{onEdit();onClose();}}><IEdit s={15}/>Editar conta</Btn>
-          {canDelete
-            ?<Btn v="danger" cls="w-full" onClick={()=>{if(confirm(`Excluir "${account.name}"? Esta ação não pode ser desfeita.`)){s.delAcct(account.id);onClose();}}}><ITrash s={15}/>Excluir conta</Btn>
-            :<>
-              <div className="bg-warn/10 border border-warn/20 rounded-xl px-4 py-3">
-                <p className="text-xs text-zinc-400 flex items-start gap-2"><IInfo s={14} cls="text-warn shrink-0 mt-0.5"/>Esta conta tem {txCount} movimentações vinculadas. Você pode arquivá-la para preservar o histórico.</p>
-              </div>
-              <Btn v="danger" cls="w-full" onClick={()=>{if(confirm(`Arquivar "${account.name}"? O histórico será mantido.`)){s.updAcct(account.id,{archived:true});onClose();}}}><IArchive s={15}/>Arquivar conta</Btn>
-            </>
-          }
-        </div>
-      </div>
-    </Modal>
-  );
-}
 
 /* ═══════════════════════════════════════
    FIX #5 — Modal de ações de conta (editar / arquivar / excluir)
@@ -1002,7 +925,6 @@ function DashboardScreen({nav}){
           action={<Btn onClick={()=>nav('contas')} v="ghost" cls="text-accent">Ir para Contas →</Btn>}/>
       ):(
         <>
-<<<<<<< HEAD
           {/* FIX 2 — Card principal mostra saldo real (descontando faturas abertas) */}
           <div className="bg-card rounded-2xl border border-line p-5 mb-4">
             <p className="text-xs text-zinc-500 mb-1">Saldo disponível</p>
@@ -1017,16 +939,6 @@ function DashboardScreen({nav}){
             )}
           </div>
 
-=======
-          {/* Saldo disponível — apenas banco + dinheiro */}
-          <div className="bg-card rounded-2xl border border-line p-5 mb-4">
-            <p className="text-xs text-zinc-500 mb-1">Saldo disponível (banco + dinheiro)</p>
-            <p className="text-3xl font-bold text-white tracking-tight">{fmtCur(liq)}</p>
-            <p className="text-xs text-zinc-500 mt-2">Patrimônio total: <span className="text-white font-medium">{fmtCur(tot)}</span></p>
-          </div>
-
-          {/* FIX #1 — Card VR separado */}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
           {hasVR&&(
             <div className="bg-card rounded-2xl border border-warn/25 p-4 mb-4 flex items-center justify-between">
               <div>
@@ -1171,10 +1083,6 @@ function ContasScreen(){
   const[tab,setTab]=useState('contas');
   const[showAcct,setShowAcct]=useState(false);
   const[editAcct,setEditAcct]=useState(null);
-<<<<<<< HEAD
-=======
-  /* FIX #5 — Estado para modal de ações da conta */
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
   const[actAcct,setActAcct]=useState(null);
   const[showBill,setShowBill]=useState(false);
   const[editBill,setEditBill]=useState(null);
