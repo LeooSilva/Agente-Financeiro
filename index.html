@@ -575,13 +575,8 @@ function AcctForm({editing,onClose}){
       <form onSubmit={submit} className="space-y-4">
         <Inp label="Nome da conta" value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Nubank, Dinheiro, VR Refeição"/>
         <Sel label="Tipo" value={type} onChange={e=>setType(e.target.value)} options={ACCT_TYPES}/>
-<<<<<<< HEAD
         {type==='vr'&&<div className="bg-warn/10 border border-warn/20 rounded-xl px-3 py-2.5 text-xs text-zinc-400 flex items-start gap-2"><IInfo s={13} cls="text-warn shrink-0 mt-0.5"/>Contas VR aparecem em card separado no painel e não entram no saldo disponível.</div>}
         <Inp label="Saldo inicial" type="number" step="0.01" value={bal} onChange={e=>setBal(e.target.value)}/>
-=======
-        {type==='vr'&&<div className="bg-warn/10 border border-warn/20 rounded-xl px-3 py-2.5 text-xs text-zinc-400 flex items-start gap-2"><IInfo s={13} cls="text-warn shrink-0 mt-0.5"/>Contas VR não entram no saldo disponível — aparecem em card separado no painel.</div>}
-        <Inp label="Saldo inicial (pode ser negativo)" type="number" step="0.01" value={bal} onChange={e=>setBal(e.target.value)}/>
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
         <div><p className="text-xs font-medium text-zinc-400 mb-2">Cor</p><Swatches value={color} onChange={setColor}/></div>
         {err&&<p className="text-danger text-sm">{err}</p>}
         <div className="grid grid-cols-2 gap-3">
@@ -667,13 +662,8 @@ function TxForm({editing,onClose}){
     if(!v||v<=0){setErr('Valor inválido.');return;}
     if(!desc.trim()){setErr('Informe a descrição.');return;}
     if(type==='transferencia'){
-<<<<<<< HEAD
       if(!acctId||!toId){setErr('Selecione as contas.');return;}
       if(acctId===toId){setErr('Origem e destino devem ser diferentes.');return;}
-=======
-      if(!acctId||!toId){setErr('Selecione as contas de origem e destino.');return;}
-      if(acctId===toId){setErr('Origem e destino devem ser contas diferentes.');return;}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
     }
     if(editing){
       s.updTx(editing.id,{description:desc.trim(),category:cat,note,date:fromDateVal(date),amount:isGrp?editing.amount:v});
@@ -705,18 +695,7 @@ function TxForm({editing,onClose}){
         )}
 
         <Seg value={type} onChange={setType} opts={[{v:'despesa',l:'Despesa'},{v:'receita',l:'Receita'},{v:'transferencia',l:'Transfer.'}]}/>
-<<<<<<< HEAD
         <Inp label={isInstallable&&iN>1?'Valor total da compra (R$)':'Valor (R$)'} type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0,00"/>
-=======
-
-        {/* FIX #4 — Label contextual para parcelamento */}
-        <Inp
-          label={isInstallable&&iN>1?'Valor total da compra (R$)':'Valor (R$)'}
-          type="number" step="0.01" min="0"
-          value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0,00"
-        />
-
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
         {type!=='transferencia'&&<Sel label="Categoria" value={cat} onChange={e=>setCat(e.target.value)} options={s.categories.map(c=>({v:c.name,l:c.name}))}/>}
 
         {type==='transferencia'?(
@@ -736,36 +715,19 @@ function TxForm({editing,onClose}){
         <Inp label="Data" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
         <Inp label="Descrição" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Ex: Supermercado, Combustível..."/>
         <Txtarea label="Observação (opcional)" value={note} onChange={e=>setNote(e.target.value)} placeholder="Detalhes..."/>
-<<<<<<< HEAD
-=======
-
-        {/* FIX #4 — Preview de parcelamento destacado */}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
         {isInstallable&&(
           <div>
             <Inp label="Número de parcelas (1 = à vista)" type="number" min="1" max="60" value={inst} onChange={e=>setInst(e.target.value)}/>
             {iN>1&&amtNum>0&&(
               <div className="mt-2 bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
                 <p className="text-sm font-semibold text-accent">{iN}x de {fmtCur(amtNum/iN)}</p>
-<<<<<<< HEAD
                 <p className="text-xs text-zinc-500 mt-0.5">Total: {fmtCur(amtNum)} · cada parcela num mês diferente</p>
-=======
-                <p className="text-xs text-zinc-500 mt-0.5">Total: {fmtCur(amtNum)} · 1ª parcela hoje, demais nos meses seguintes</p>
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
               </div>
             )}
           </div>
         )}
-<<<<<<< HEAD
         {isGrp&&<p className="text-[11px] text-warn bg-warn/10 rounded-lg px-3 py-2">Parcelamento — valor fixo por parcela.</p>}
         {err&&<p className="text-danger text-sm">{err}</p>}
-=======
-
-        {isGrp&&<p className="text-[11px] text-warn bg-warn/10 rounded-lg px-3 py-2">Parcelamento — valor fixo por parcela. Para refazer, exclua todas as parcelas.</p>}
-        {err&&<p className="text-danger text-sm">{err}</p>}
-
-        {/* FIX #2 — Botão Cancelar ao lado do Adicionar */}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
         <div className="grid grid-cols-2 gap-3 pt-1">
           <Btn v="secondary" onClick={onClose} cls="w-full">Cancelar</Btn>
           <Btn type="submit" cls="w-full">{editing?'Salvar':'Adicionar'}</Btn>
@@ -916,11 +878,7 @@ function SalaryForm({editing,onClose}){
         <Inp label="Valor líquido (R$)" type="number" step="0.01" min="0" value={amt} onChange={e=>setAmt(e.target.value)}/>
         <Inp label="Dia previsto de recebimento" type="number" min="1" max="31" value={day} onChange={e=>setDay(e.target.value)}/>
         {s.accounts.length?(
-<<<<<<< HEAD
           <Sel label="Conta de destino" value={acctId} onChange={e=>setAcctId(e.target.value)}
-=======
-          <Sel label="Conta de destino do crédito" value={acctId} onChange={e=>setAcctId(e.target.value)}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
             options={[{v:'',l:'— Selecione uma conta —'},...s.accounts.map(a=>({v:a.id,l:a.name}))]}/>
         ):<p className="text-xs text-warn">Cadastre uma conta primeiro.</p>}
         {!editing&&selAcct&&amtNum>0&&(
@@ -985,11 +943,7 @@ function LoginScreen(){
 }
 
 /* ═══════════════════════════════════════
-<<<<<<< HEAD
    SCREEN: DASHBOARD — FIX 2 (saldo real)
-=======
-   SCREEN: DASHBOARD — FIX #1 (VR separado)
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 ═══════════════════════════════════════ */
 function DashboardScreen({nav}){
   const s=useS();
@@ -999,7 +953,6 @@ function DashboardScreen({nav}){
   const tot=useMemo(()=>totalBal(s.accounts,s.transactions),[s.accounts,s.transactions]);
   const vr=useMemo(()=>vrBal(s.accounts,s.transactions),[s.accounts,s.transactions]);
   const hasVR=useMemo(()=>s.accounts.some(a=>!a.archived&&a.type==='vr'),[s.accounts]);
-<<<<<<< HEAD
 
   /* FIX 2 — soma das faturas atuais não pagas */
   const {totalUnpaid,available}=useMemo(()=>{
@@ -1013,8 +966,6 @@ function DashboardScreen({nav}){
     return{totalUnpaid:Math.round(totalUnpaid*100)/100,available:Math.round((liq-totalUnpaid)*100)/100};
   },[s.cards,s.transactions,s.invoicePayments,liq]);
 
-=======
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
   const inc=useMemo(()=>mthInc(s.transactions,mk),[s.transactions,mk]);
   const exp=useMemo(()=>mthExp(s.transactions,mk),[s.transactions,mk]);
   const cats=useMemo(()=>expByCat(s.transactions,mk),[s.transactions,mk]);
@@ -1150,11 +1101,7 @@ function DashboardScreen({nav}){
 }
 
 /* ═══════════════════════════════════════
-<<<<<<< HEAD
    SCREEN: MOVIMENTAÇÕES — FIX 4 (por mês)
-=======
-   SCREEN: MOVIMENTAÇÕES — FIX #3 (botão maior)
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
 ═══════════════════════════════════════ */
 function MovScreen(){
   const s=useS();
@@ -1180,10 +1127,6 @@ function MovScreen(){
     <div className="px-4 pt-5 max-w-md mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-white">Movimentações</h1>
-<<<<<<< HEAD
-=======
-        {/* FIX #3 — Botão maior para mobile */}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
         <Btn onClick={()=>{setEditTx(null);setShowForm(true);}} cls="px-5 py-3 text-sm"><IPlus s={16}/>Novo</Btn>
       </div>
 
@@ -1250,10 +1193,6 @@ function ContasScreen(){
     <div className="px-4 pt-5 max-w-md mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-white">Contas</h1>
-<<<<<<< HEAD
-=======
-        {/* FIX #3 */}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
         <Btn onClick={openNew} cls="px-5 py-3 text-sm"><IPlus s={16}/>Novo</Btn>
       </div>
       <div className="mb-4"><Seg value={tab} onChange={setTab} opts={[{v:'contas',l:'Contas'},{v:'recorrentes',l:'Recorrentes'},{v:'salarios',l:'Salário'}]}/></div>
@@ -1262,14 +1201,7 @@ function ContasScreen(){
         <div className="space-y-3">
           {!activeAccounts.length
             ?<Empty icon={<IBank s={32}/>} title="Nenhuma conta" sub="Adicione bancos, dinheiro físico, VR e benefícios."/>
-<<<<<<< HEAD
             :activeAccounts.map(a=><AcctRow key={a.id} account={a} balance={acctBal(a,s.transactions)} onClick={()=>setActAcct(a)}/>)
-=======
-            :activeAccounts.map(a=>(
-              /* FIX #5 — Click abre modal de ações, não direto o form */
-              <AcctRow key={a.id} account={a} balance={acctBal(a,s.transactions)} onClick={()=>setActAcct(a)}/>
-            ))
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
           }
           {activeAccounts.length>0&&(
             <div className="space-y-2">
@@ -1295,7 +1227,6 @@ function ContasScreen(){
         <div className="space-y-3">
           {!s.recurringBills.length
             ?<Empty icon={<IRep s={32}/>} title="Nenhuma conta recorrente" sub="Cadastre Netflix, aluguel, internet, academia etc."/>
-<<<<<<< HEAD
             :s.recurringBills.map(b=>{
               const txThisMk=s.transactions.find(t=>t.recurringId===b.id&&t.date.slice(0,7)===curMk());
               const paidThisMk=txThisMk?.paid===true;
@@ -1317,24 +1248,6 @@ function ContasScreen(){
                 </div>
               );
             })
-=======
-            :s.recurringBills.map(b=>(
-              <div key={b.id} className="bg-card border border-line rounded-2xl p-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <p className="text-sm font-semibold text-white truncate">{b.name}</p>
-                      {!b.active&&<span className="text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5 shrink-0">Pausada</span>}
-                    </div>
-                    <p className="text-xs text-zinc-500">{b.category} · Todo dia {b.dueDay}</p>
-                  </div>
-                  <span className="text-sm font-bold text-white shrink-0">{fmtCur(b.amount)}</span>
-                  <IBt onClick={()=>{setEditBill(b);setShowBill(true);}}><IEdit s={15}/></IBt>
-                  <IBt onClick={()=>{if(confirm(`Excluir "${b.name}"?\nLançamentos já gerados serão mantidos no histórico.`))s.delBill(b.id);}}><ITrash s={15} cls="text-danger"/></IBt>
-                </div>
-              </div>
-            ))
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
           }
         </div>
       )}
@@ -1356,11 +1269,7 @@ function ContasScreen(){
                   </div>
                   <span className="text-sm font-bold text-accent shrink-0">{fmtCur(sl.amount)}</span>
                   <IBt onClick={()=>{setEditSal(sl);setShowSal(true);}}><IEdit s={15}/></IBt>
-<<<<<<< HEAD
                   <IBt onClick={()=>{if(confirm(`Excluir "${sl.description}"?\nLançamentos já gerados serão mantidos.`))s.delSal(sl.id);}}><ITrash s={15} cls="text-danger"/></IBt>
-=======
-                  <IBt onClick={()=>{if(confirm(`Excluir "${sl.description}"?\nLançamentos já gerados serão mantidos no histórico.`))s.delSal(sl.id);}}><ITrash s={15} cls="text-danger"/></IBt>
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
                 </div>
               </div>
             ))
@@ -1368,17 +1277,7 @@ function ContasScreen(){
         </div>
       )}
 
-<<<<<<< HEAD
       {actAcct&&<AcctActions account={actAcct} balance={acctBal(actAcct,s.transactions)} onClose={()=>setActAcct(null)} onEdit={()=>{setEditAcct(actAcct);setShowAcct(true);}}/>}
-=======
-      {/* FIX #5 — Modal de ações da conta */}
-      {actAcct&&<AcctActions
-        account={actAcct}
-        balance={acctBal(actAcct,s.transactions)}
-        onClose={()=>setActAcct(null)}
-        onEdit={()=>{setEditAcct(actAcct);setShowAcct(true);}}
-      />}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
       {showAcct&&<AcctForm editing={editAcct} onClose={()=>{setShowAcct(false);setEditAcct(null);}}/>}
       {showBill&&<BillForm editing={editBill} onClose={()=>{setShowBill(false);setEditBill(null);}}/>}
       {showSal&&<SalaryForm editing={editSal} onClose={()=>{setShowSal(false);setEditSal(null);}}/>}
@@ -1399,10 +1298,6 @@ function CartoesScreen(){
     <div className="px-4 pt-5 max-w-md mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-white">Cartões</h1>
-<<<<<<< HEAD
-=======
-        {/* FIX #3 */}
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
         <Btn onClick={()=>{setEditCard(null);setShowForm(true);}} cls="px-5 py-3 text-sm"><IPlus s={16}/>Novo</Btn>
       </div>
       {!s.cards.length?<Empty icon={<ICrd s={40}/>} title="Nenhum cartão de crédito" sub="Adicione seus cartões para controlar faturas e limites."/>:(
@@ -1437,11 +1332,7 @@ function CartoesScreen(){
                         <div className="space-y-2 max-h-48 overflow-y-auto">
                           {s.transactions.filter(t=>t.invoiceId===card.id+'_'+cmk&&!t.isInvoicePayment).sort((a,b)=>b.date.localeCompare(a.date)).map(tx=>(
                             <div key={tx.id} className="flex justify-between text-xs">
-<<<<<<< HEAD
                               <span className="text-zinc-400 truncate pr-2">{tx.description}{tx.installmentTotal?` (${tx.installmentIndex}/${tx.installmentTotal})`:''} · <span className="text-zinc-600">{fmtDate(tx.date)}</span></span>
-=======
-                              <span className="text-zinc-400 truncate pr-2">{tx.description} {tx.installmentTotal?`(${tx.installmentIndex}/${tx.installmentTotal})`:''} · <span className="text-zinc-600">{fmtDate(tx.date)}</span></span>
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
                               <span className="text-white shrink-0">{fmtCur(tx.amount)}</span>
                             </div>
                           ))}
@@ -1636,11 +1527,7 @@ function ConfigScreen(){
             <Btn v="danger" cls="w-full" onClick={()=>{if(confirm('Apagar TODOS os dados financeiros? Esta ação não pode ser desfeita.'))s.clrData();}}><ITrash s={16}/>Apagar todos os dados</Btn>
           </div>
           <div className="bg-card rounded-2xl border border-line p-4 text-center">
-<<<<<<< HEAD
             <p className="text-xs text-zinc-600">Meu Financeiro v1.2 · localStorage mf-v1 · {new Date().getFullYear()}</p>
-=======
-            <p className="text-xs text-zinc-600">Meu Financeiro v1.1 · Dados locais · {new Date().getFullYear()}</p>
->>>>>>> 0498c1d244f726b12ea3a3c76dad841578dab66d
           </div>
         </div>
       )}
